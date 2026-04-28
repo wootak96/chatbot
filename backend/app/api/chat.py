@@ -3,11 +3,12 @@
 Drives the LangGraph workflow and emits:
   1. one SSE chunk per node (progress message)
   2. final answer streamed token-by-token from the generate node's LLM
-  3. trailing **출처** section + [DONE]
+  3. trailing CITES marker (hidden in UI, used to wrap inline [N] as links) + [DONE]
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Header
@@ -134,11 +135,21 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                 fallback, model=request.model, completion_id=completion_id
             )
 
+    # Emit a hidden CITES marker so the frontend can wrap inline [N] tokens in
+    # the answer with clickable links to the corresponding source URL. We drop
+    # the verbose **출처** block to save tokens — only N→url is needed since
+    # the bracket text itself shows up inline already.
     sources = final_state.get("sources") or []
-    src_block = sse.render_sources(sources)
-    if src_block:
+    cites = []
+    for i, s in enumerate(sources, 1):
+        url = (s.get("url") or "").strip()
+        if not url:
+            continue
+        cites.append({"n": i, "url": url})
+    if cites:
+        marker = "\n<!--CITES:" + json.dumps(cites, ensure_ascii=False) + "-->"
         yield sse.text_chunk(
-            src_block, model=request.model, completion_id=completion_id
+            marker, model=request.model, completion_id=completion_id
         )
 
     yield sse.stop_chunk(model=request.model, completion_id=completion_id)

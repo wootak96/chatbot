@@ -243,9 +243,10 @@ def test_chat_completions_streams_sse(stub_judge, stub_generator, stub_es):
     assert "─" in full_text
     # Final answer body
     assert "RRF" in full_text
-    # Sources block
-    assert "**출처**" in full_text
+    # Hidden CITES marker carries source URLs (no visible **출처** block)
+    assert "<!--CITES:" in full_text
     assert "https://x/y" in full_text
+    assert "**출처**" not in full_text
 
     # Last non-DONE chunk should have finish_reason="stop"
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"

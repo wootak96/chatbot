@@ -118,6 +118,11 @@ CHAT_HTML = """<!doctype html>
   .msg .body { margin-top: 0; }
   .msg .body a { color: var(--accent); text-decoration: none; }
   .msg .body a:hover { text-decoration: underline; }
+  .msg .body a.cite {
+    font-size: 90%; font-weight: 600; padding: 0 2px; border-radius: 4px;
+    background: rgba(120,120,128,0.14);
+  }
+  .msg .body a.cite:hover { background: rgba(120,120,128,0.28); text-decoration: none; }
   .msg .body strong { color: var(--text); font-weight: 600; }
   .msg.user .body strong { color: #ffffff; }
   .msg .body code {
@@ -443,11 +448,28 @@ CHAT_HTML = """<!doctype html>
     }
   }
 
-  // Tiny renderer: escape HTML, autolink http(s), **bold**, `code`, and triple-backtick code blocks.
+  // Tiny renderer: escape HTML, autolink http(s), **bold**, `code`, triple-backtick code blocks,
+  // and inline citation tokens [N] mapped to source URLs via the CITES marker.
   function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
-  function renderText(text) {
+  // Parse a trailing CITES marker out of the answer body. Returns the text
+  // without the marker plus a {n: url} map so [N] tokens can be linked.
+  function parseCites(text) {
+    const m = text.match(/\\n?<!--CITES:(\\[[\\s\\S]*?\\])-->/);
+    if (!m) return { stripped: text, cites: {} };
+    let cites = {};
+    try {
+      const arr = JSON.parse(m[1]);
+      for (const c of arr) {
+        if (c && typeof c.n === 'number' && c.url) cites[c.n] = c.url;
+      }
+    } catch (e) { /* malformed marker — render as plain text */ }
+    const stripped = text.slice(0, m.index) + text.slice(m.index + m[0].length);
+    return { stripped, cites };
+  }
+  function renderText(text, cites) {
+    cites = cites || {};
     // Pull out triple-backtick code blocks first.
     const blocks = [];
     text = text.replace(/```([\\s\\S]*?)```/g, (_, code) => {
@@ -460,6 +482,12 @@ CHAT_HTML = """<!doctype html>
     html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
     html = html.replace(/(https?:\\/\\/[^\\s)]+)/g,
       (m) => `<a href="${m}" target="_blank" rel="noopener">${m}</a>`);
+    // Replace inline [N] citation tokens with anchors when a URL is mapped.
+    html = html.replace(/\\[(\\d+)\\]/g, (m, n) => {
+      const url = cites[+n];
+      if (!url) return m;
+      return `<a class="cite" href="${url}" target="_blank" rel="noopener">${m}</a>`;
+    });
     html = html.replace(/\\u0000CODEBLOCK(\\d+)\\u0000/g, (_, i) => {
       return `<pre><code>${escapeHtml(blocks[+i])}</code></pre>`;
     });
@@ -480,7 +508,8 @@ CHAT_HTML = """<!doctype html>
       const idx = content.indexOf(SEP);
       if (idx >= 0) {
         progress.textContent = content.slice(0, idx).trim();
-        body.innerHTML = renderText(content.slice(idx + SEP.length));
+        const parsed = parseCites(content.slice(idx + SEP.length));
+        body.innerHTML = renderText(parsed.stripped, parsed.cites);
         if (progress.textContent) progress.style.display = '';
       } else {
         progress.textContent = content.trim();
@@ -521,7 +550,8 @@ CHAT_HTML = """<!doctype html>
         const after = buf.slice(idx + SEP.length);
         progress.textContent = before;
         if (before) progress.style.display = '';
-        body.innerHTML = renderText(after);
+        const parsed = parseCites(after);
+        body.innerHTML = renderText(parsed.stripped, parsed.cites);
       } else {
         progress.textContent = buf.trim();
         if (progress.textContent) progress.style.display = '';

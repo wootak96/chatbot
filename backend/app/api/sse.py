@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Iterable
 
 
 def _chunk(content: str, *, model: str, completion_id: str, finish_reason: str | None = None) -> dict:
@@ -60,20 +59,3 @@ def stop_chunk(*, model: str, completion_id: str) -> str:
 
 def done_marker() -> str:
     return "data: [DONE]\n\n"
-
-
-def render_sources(sources: Iterable[dict]) -> str:
-    """Render the trailing **출처** section. Items without a url are dropped
-    so citation lines like `[1] ` (empty) never show up."""
-    items = [s for s in sources if (s.get("url") or "").strip()]
-    if not items:
-        return ""
-    lines = ["", "", "**출처**"]
-    for i, s in enumerate(items, 1):
-        url = s["url"].strip()
-        title = (s.get("title") or "").strip()
-        if title:
-            lines.append(f"[{i}] {title} — {url}")
-        else:
-            lines.append(f"[{i}] {url}")
-    return "\n".join(lines)

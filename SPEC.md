@@ -471,7 +471,7 @@ END
   - intent가 `chitchat`이면 `CHITCHAT` 프롬프트로 친근한 1~2문장 응답 (출처 없음)
   - candidates 비었거나 `sufficient=False`(retry 소진)면 *"해당 정보를 찾을 수 없습니다."* 즉시 반환 (도메인 grounded-only 정책, 6차)
   - 그 외에는 `GENERATE` 프롬프트로 문서 내용만 근거로 답변 생성, 본문에 `[1]`, `[2]` 인용 번호만 삽입
-- **6차 출처 정책**: LLM은 `**출처**` 섹션을 작성하지 않음. 서버(`chat.py` + `sse.render_sources()`)가 단일하게 출처 블록을 append. 만약 LLM이 지시를 어기고 `**출처**`를 출력하면 `chat.py`의 `SOURCE_MARKER` sanitizer가 그 시점에 스트림을 truncate (멀티 chunk 분할 도착 안전 처리)
+- **출처 정책 (인라인 링크 방식, 토큰 절감)**: 답변 본문 하단의 `**출처**` 블록 자체를 폐기. LLM은 본문에 `[N]`만 삽입하고, 서버는 LLM 스트림이 끝난 뒤 한 줄짜리 hidden 마커 `<!--CITES:[{"n":N,"url":"..."}]-->` 를 append. 프론트엔드(`web.py`의 `parseCites` + `renderText`)가 이 마커를 잘라내고 본문의 `[N]` 토큰을 해당 url로 가는 `<a class="cite">[N]</a>` 앵커로 자동 변환. 토큰 낭비 제거(긴 url·title 텍스트 미전송)와 디버깅 편의(어떤 [N]이 실제 인용되었는지 가시) 두 마리 토끼. LLM이 지시를 어기고 본문에 `**출처**`를 출력하면 `chat.py`의 `SOURCE_MARKER` sanitizer가 그 시점에 스트림을 truncate (멀티 chunk 분할 도착 안전 처리)
 - **출력**: 최종 답변 (스트리밍)
 - **UI 표시**: 4차에서 `✍️ 답변 생성 중...` 진행 메시지 제거. 직전 노드(`self_check`) 메시지 후 바로 구분선 → 답변 본문 토큰 스트리밍
 
@@ -553,14 +553,13 @@ class RAGState(TypedDict):
 
 RRF(Reciprocal Rank Fusion)는 ... [1].
 BM25와 semantic 검색의 순위를 결합하여 ... [2].
-
-**출처**
-[1] https://www.elastic.co/guide/...
-[2] https://internal-wiki.hmg-corp.io/...
+<!--CITES:[{"n":1,"url":"https://www.elastic.co/guide/..."},{"n":2,"url":"https://internal-wiki.hmg-corp.io/..."}]-->
 ```
 
+(클라이언트는 `<!--CITES:...-->` 마커를 본문에서 떼어내 표시하지 않고, 본문의 `[1]`·`[2]`만 해당 url로 가는 클릭 가능한 앵커로 변환)
+
 > 분해/재작성 결과는 진행 메시지 안에 트리(`├─`/`└─`)로 동봉되어 클라가 단일 SSE chunk만 받아도 표시 가능. 별도 metadata 채널 불필요.
-> 출처 섹션은 `url` 필드가 있는 항목만 렌더 (빈 url 항목은 자동 스킵).
+> CITES 마커는 url이 있는 항목만 포함 (빈 url 항목은 자동 스킵). 마커가 누락되면 `[N]`은 그냥 텍스트로 남고 답변 동작에는 영향 없음.
 
 ### 5.3 구현 노트
 - 진행 메시지는 SSE chunk로 즉시 emit, 답변 토큰은 `on_chat_model_stream` 이벤트로 인터리브 (`generate` / `general_chat` 두 노드 모두 토큰 스트리밍 대상)
