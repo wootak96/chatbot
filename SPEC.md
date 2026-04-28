@@ -411,7 +411,7 @@ END
 - **역할**: 각 서브쿼리마다 LLM에게 어느 인덱스에 검색할지 질의 (`asyncio.gather`로 병렬). 응답이 비어 있거나 파싱 실패 시 둘 다로 안전 폴백
 - **인덱스 description (`INDEX_ROUTE` 프롬프트)**:
   - `elasticsearch`: Elasticsearch 공식문서. 검색/색인/RRF/kNN/매핑, **8 ~ 9 버전 트러블슈팅**, **업그레이드 가이드(8.x → 9.x 마이그레이션)**, **REST API 레퍼런스(엔드포인트/파라미터/요청·응답 스펙)** 등
-  - `kafka`: Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈 등
+  - `kafka`: Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈, **Kafka KIP(Kafka Improvement Proposals)**, **릴리스 노트**, **JIRA 이슈 트래커**, **Sarama Go 클라이언트**, **Confluent Schema Registry**, **librdkafka C 클라이언트**, **Amazon MSK 개발자 가이드** 등
 - **UI 표시**: `🧭 인덱스 라우팅 중...`
 
 #### [6] hybrid_retrieve
