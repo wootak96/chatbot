@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from langchain_core.messages import HumanMessage
 
@@ -10,6 +11,40 @@ from app.config import get_settings
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+
+def doc_label(doc: dict[str, Any], excerpt_chars: int = 70) -> str:
+    """Human-readable label for UI logging when `title` field may be empty.
+    Priority: title → last decoded segment of url → first chars of content.
+    Returns "" only if nothing is available."""
+    title = (doc.get("title") or "").strip()
+    if title:
+        return title
+    url = (doc.get("url") or "").strip()
+    if url:
+        try:
+            path = urlparse(url).path or url
+        except Exception:
+            path = url
+        seg = path.rstrip("/").rsplit("/", 1)[-1] or url
+        seg = unquote(seg)
+        if seg:
+            return seg
+    content = (doc.get("content") or "").strip().replace("\n", " ")
+    if content:
+        snippet = content[:excerpt_chars].rstrip()
+        return snippet + ("…" if len(content) > excerpt_chars else "")
+    return ""
+
+
+def doc_dedup_key(doc: dict[str, Any]) -> str:
+    """Stable dedup key for collapsing multiple chunks of the same source doc
+    in UI lists. Prefers title; falls back to url; finally to id."""
+    return (
+        (doc.get("title") or "").strip()
+        or (doc.get("url") or "").strip()
+        or (doc.get("id") or "").strip()
+    )
 
 
 def parse_json(text: str) -> dict[str, Any]:

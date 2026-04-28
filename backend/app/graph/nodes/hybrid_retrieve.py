@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from app.graph.nodes import PROGRESS_KEY
+from app.graph.nodes._helpers import doc_dedup_key, doc_label
 from app.graph.state import RAGState
 from app.services.elasticsearch_client import hybrid_search
 
@@ -62,20 +63,24 @@ async def hybrid_retrieve(state: RAGState) -> dict:
             seen.add(key)
             merged.append(d)
 
-    seen_titles: set[str] = set()
-    titles: list[str] = []
+    # Dedup labels for UI: when `title` field is missing, fall back to URL
+    # last segment or content excerpt so something useful is shown per doc.
+    seen_keys: set[str] = set()
+    labels: list[str] = []
     for d in merged:
-        t = (d.get("title") or "").strip()
-        if not t or t in seen_titles:
+        key = doc_dedup_key(d) or doc_label(d)
+        if not key or key in seen_keys:
             continue
-        seen_titles.add(t)
-        titles.append(t)
-    titles_block = "\n" + "\n".join(f"  • {t}" for t in titles) if titles else ""
+        seen_keys.add(key)
+        label = doc_label(d)
+        if label:
+            labels.append(label)
+    labels_block = "\n" + "\n".join(f"  • {t}" for t in labels) if labels else ""
 
     return {
         "candidates": merged,
         PROGRESS_KEY: (
             f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)"
-            f"{titles_block}"
+            f"{labels_block}"
         ),
     }

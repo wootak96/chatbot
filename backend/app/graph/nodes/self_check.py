@@ -3,7 +3,12 @@ from __future__ import annotations
 from app import prompts
 from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
-from app.graph.nodes._helpers import llm_json, render_docs_brief
+from app.graph.nodes._helpers import (
+    doc_dedup_key,
+    doc_label,
+    llm_json,
+    render_docs_brief,
+)
 from app.graph.state import RAGState
 from app.services.llm_factory import get_judge_llm
 
@@ -47,22 +52,28 @@ async def self_check(state: RAGState) -> dict:
             continue
         idx_to_relevant[idx] = bool(item.get("relevant", True))
 
-    title_verdict: dict[str, bool] = {}
-    title_order: list[str] = []
+    # Aggregate per-chunk verdicts to per-source-doc using a stable dedup key
+    # (title → url → id). Display label falls back the same way so something
+    # human-readable shows even when `title` field is empty in the index.
+    label_verdict: dict[str, bool] = {}
+    label_order: list[str] = []
+    label_for_key: dict[str, str] = {}
     for i, d in enumerate(candidates, 1):
-        t = (d.get("title") or "").strip()
-        if not t:
+        key = doc_dedup_key(d) or doc_label(d)
+        if not key:
             continue
         chunk_relevant = idx_to_relevant.get(i, True)
-        if t not in title_verdict:
-            title_order.append(t)
-            title_verdict[t] = chunk_relevant
+        if key not in label_verdict:
+            label_order.append(key)
+            label_verdict[key] = chunk_relevant
+            label_for_key[key] = doc_label(d) or key
         else:
-            title_verdict[t] = title_verdict[t] or chunk_relevant
+            label_verdict[key] = label_verdict[key] or chunk_relevant
 
-    if title_order:
+    if label_order:
         titles_block = "\n" + "\n".join(
-            f"  {'✓' if title_verdict[t] else '✗'} {t}" for t in title_order
+            f"  {'✓' if label_verdict[k] else '✗'} {label_for_key[k]}"
+            for k in label_order
         )
     else:
         titles_block = ""
