@@ -79,6 +79,14 @@ Your job is to simplify complex queries into multiple queries that can be answer
 in isolation to eachother.
 
 If the query is simple, then keep it as it is.
+
+CRITICAL — synthesis verbs are NOT search targets:
+The user may ask the LLM to **compare / contrast / diff / summarize / translate / organize / list pros and cons** across multiple topics. These verbs describe what the LLM should do AT ANSWER-GENERATION TIME using the retrieved evidence — they are NOT keywords to search for. The retrieval layer must look up each topic INDEPENDENTLY; the LLM will perform the synthesis afterwards.
+- Detect synthesis verbs in any language (Korean: 비교/차이/대비/vs/요약/정리/번역, English: compare/difference/vs/summarize/translate/organize/contrast).
+- Strip the synthesis verb and decompose into one sub-query per underlying topic/entity.
+- NEVER produce a sub-query like "differences between X and Y" or "comparison of X and Y" — those are LLM tasks, not retrieval tasks.
+- If only ONE topic remains after stripping, return a single sub-query about that topic.
+
 Examples
 1. Query: Did Microsoft or Google make more money last year?
    Decomposed Questions: [Question(question='How much profit did Microsoft make last year?', answer=None), Question(question='How much profit did Google make last year?', answer=None)]
@@ -86,7 +94,13 @@ Examples
    Decomposed Questions: [Question(question='What is the capital of France?', answer=None)]
 3. Query: Elasticsearch와 Kafka 특징 비교해줘
    Decomposed Questions: [Question(question='Elasticsearch 특징', answer=None), Question(question='Kafka 특징', answer=None)]
-4. Query: {query}
+4. Query: ES랑 Kafka 차이점이 뭐야?
+   Decomposed Questions: [Question(question='Elasticsearch 개요와 특징', answer=None), Question(question='Kafka 개요와 특징', answer=None)]
+5. Query: Elasticsearch RRF와 BM25 장단점 정리해줘
+   Decomposed Questions: [Question(question='Elasticsearch RRF 동작 방식', answer=None), Question(question='Elasticsearch BM25 동작 방식', answer=None)]
+6. Query: kafka consumer group 동작 방식 요약해줘
+   Decomposed Questions: [Question(question='Kafka consumer group 동작 방식', answer=None)]
+7. Query: {query}
    Decomposed Questions:
 
 Respond ONLY with a JSON object in this exact shape (no other text, no Python literals):
@@ -112,9 +126,11 @@ Produce TWO outputs:
      • "mechanism of X", "internals of X"
      • "X performance tuning", "X configuration options"
      • "how X works" (relative-clause noun phrase, acceptable)
-     • "differences between X and Y", "comparison of X and Y"
    - **FORBIDDEN**: complete declarative sentences with a finite main verb that read like an answer. Do NOT write "X is …", "X provides …", "X uses …".
    - Fix typos. Normalize abbreviations the same way as keywords.
+
+CRITICAL — strip synthesis verbs from the search query:
+The retrieval layer fetches evidence; the LLM does the synthesis afterwards. Words like 비교/차이/대비/vs/요약/정리/번역 (and English compare/difference/contrast/vs/summarize/translate) are LLM TASKS, not search subjects. Even if a sub-query still carries a synthesis verb (e.g. decompose was lenient), REWRITE it as a topic-level lookup of the FIRST or PRIMARY entity — never produce "differences between X and Y" or "comparison of X and Y" as a search query, because there is no "comparison document"; there are only documents about X and documents about Y. (Cross-entity sub-queries should already have been split by `query_decompose`; this is the safety net.)
 
 Examples
 1. Input: "Elasticsearch가 뭐야?"
@@ -126,8 +142,12 @@ Examples
    Output: {{"keywords": "Kafka consumer group rebalance", "semantic": "how Kafka consumer groups work"}}
 4. Input: "ES kNN 성능 튜닝 방법"
    Output: {{"keywords": "Elasticsearch kNN performance tuning", "semantic": "performance tuning techniques for kNN search in Elasticsearch"}}
-5. Input: "ES랑 Kafka 차이점이 뭐야?"
-   Output: {{"keywords": "Elasticsearch Kafka differences", "semantic": "differences between Elasticsearch and Kafka"}}
+5. Input: "Elasticsearch 특징 요약"
+   Output: {{"keywords": "Elasticsearch features architecture", "semantic": "overview of Elasticsearch features"}}
+   (Note: "요약" is a synthesis verb — dropped. Search is for the topic itself.)
+6. Input: "Kafka consumer group 동작 정리"
+   Output: {{"keywords": "Kafka consumer group rebalance offset", "semantic": "how Kafka consumer groups work"}}
+   (Note: "정리" is a synthesis verb — dropped.)
 
 Respond with ONLY a JSON object in this exact shape (no other text):
 {{"keywords": "...", "semantic": "..."}}

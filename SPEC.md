@@ -223,7 +223,8 @@ fields:
 ### Step 3. Query Rewrite (sub-query별, 이중 출력)
 LLM이 sub-query 1개당 영어 출력 2개를 동시에 생성:
 - **`keywords`** — BM25 lexical 검색용. 영어 핵심어 2~6개 (예: `Elasticsearch RRF reciprocal rank fusion`). 약어 정규화 (ES→Elasticsearch, K8s→Kubernetes), stopword/구두점 제거
-- **`semantic`** — `semantic_text` 벡터 검색용. **질문 의도를 유지하는 영어 명사구** 4~12 토큰. 허용 형태: `"definition of X"`, `"mechanism of X"`, `"X performance tuning"`, `"how X works"`(관계절형 명사구), `"differences between X and Y"` 등. **가상 답변(HyDE) 형식 금지** — 완성된 평서문(예: *"Elasticsearch is a distributed search engine ..."*)은 출력하지 않음. 환각된 답변이 검색을 오염시키지 않도록 질문결을 보존
+- **`semantic`** — `semantic_text` 벡터 검색용. **질문 의도를 유지하는 영어 명사구** 4~12 토큰. 허용 형태: `"definition of X"`, `"mechanism of X"`, `"X performance tuning"`, `"how X works"`(관계절형 명사구). **가상 답변(HyDE) 형식 금지** — 완성된 평서문(예: *"Elasticsearch is a distributed search engine ..."*)은 출력하지 않음. 환각된 답변이 검색을 오염시키지 않도록 질문결을 보존
+- **합성 동사(synthesis verb) 금지 원칙**: `비교/차이/대비/vs/요약/정리/번역` (compare/difference/contrast/summarize/translate)은 **검색 대상이 아니라 LLM이 답변 생성 단계에서 수행하는 작업**. `query_decompose`가 토픽별로 분해 후 `query_rewrite`는 동사를 떼고 토픽 단위로만 재작성. `"differences between X and Y"`, `"comparison of X and Y"` 같은 비교 명사구는 **검색 쿼리로 출력 금지** — 비교 문서가 코퍼스에 따로 있을 가능성이 낮고, 있어도 토픽별 검색 결과를 LLM이 합성하는 게 원칙
 
 **출력**: `rewritten_queries: list[str]` (= keywords 리스트) + `semantic_queries: list[str]` (= semantic 리스트). 두 리스트 길이 동일
 **한쪽 누락 시**: 다른 쪽 값으로 폴백. 둘 다 누락 시 원본 sub-query로 폴백 (검색 항상 동작)
