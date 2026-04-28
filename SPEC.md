@@ -430,7 +430,8 @@ END
   - 불충분 + retry 한도 도달 → **`generate`** ("해당 정보를 찾을 수 없습니다."). 6차에서 `general_chat` 폴백 제거 — 도메인 grounded-only 정책: ES 코퍼스에 답이 없으면 일반 LLM 지식으로 폴백 안 함
 - **단락**: candidates 비어 있으면 LLM 호출 없이 즉시 `sufficient=False`, `retry_count += 1`
 - **합성 쿼리 충분성 원칙**: 원본 질문에 비교/차이/요약/번역 같은 합성 동사가 포함된 경우, 충분성은 **각 토픽별 근거 유무**로 판단. "두 토픽을 직접 비교한 단일 문서"의 부재는 불충분 사유가 아님 — 합성은 답변 단계 LLM이 수행. (예: "ES와 Kafka 비교"에서 ES 특징 문서 + Kafka 특징 문서가 모두 있으면 sufficient=true)
-- **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분` + 가져온 문서 `title` 목록 (중복 제거)
+- **개별 문서 vs 전체 충분성**: 전체 `sufficient`는 **토픽 커버리지** 기준 (개별 문서 무관도 OR 합산 아님). 개별 문서가 무관해도 다른 문서가 토픽을 커버하면 전체 sufficient=true. 한편 LLM이 `per_doc` 배열로 각 문서 관련성도 판정해 UI에 노출 (디버깅용).
+- **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분` + 문서별 ✓/✗ + `title` 목록 (제목 단위 dedup, 동일 title의 여러 chunk 중 하나라도 relevant면 ✓로 집계)
 
 #### [7b] query_variate (6차 신규, retry 사이클 안)
 - **언제 호출되나?**: `self_check` 불충분 + retry 한도 미도달 시 `hybrid_retrieve` 직전에 끼어듦 (`retry_count > 0`일 때만 의미)
@@ -544,9 +545,9 @@ class RAGState(TypedDict):
   • Hybrid search with RRF | Elasticsearch Guide
   • BM25 similarity | Elasticsearch Guide
 🔎 검색 결과 검증 중... ✓ 충분
-  • Reciprocal Rank Fusion | Elasticsearch Guide
-  • Hybrid search with RRF | Elasticsearch Guide
-  • BM25 similarity | Elasticsearch Guide
+  ✓ Reciprocal Rank Fusion | Elasticsearch Guide
+  ✓ Hybrid search with RRF | Elasticsearch Guide
+  ✗ BM25 similarity | Elasticsearch Guide
 
 ─────────────────────────────────────
 

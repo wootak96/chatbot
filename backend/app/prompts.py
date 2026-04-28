@@ -252,7 +252,7 @@ Respond with ONLY a JSON object:
 """
 
 
-SELF_CHECK = """다음 질문에 대해 검색된 문서들이 답변 근거로 충분한지 판단하세요.
+SELF_CHECK = """다음 질문에 대해 검색된 문서들이 답변 근거로 충분한지 판단하고, 각 문서가 질문과 관련 있는지 개별 판정하세요.
 
 핵심 원칙 — 합성(synthesis)은 LLM이 답변 단계에서 수행:
 질문에 "비교/차이/대비/vs/요약/정리/번역" 같은 합성 동사가 포함되어 있더라도, **검색은 토픽별로 따로 수행되었고, 합성은 답변 생성 단계의 LLM이 담당**합니다.
@@ -261,13 +261,21 @@ SELF_CHECK = """다음 질문에 대해 검색된 문서들이 답변 근거로 
 - 두 토픽 중 한쪽 자료만 있고 다른 쪽이 누락되었다면 → sufficient=false.
 - 질문이 단일 토픽인데 그 토픽에 대한 근거가 부족하면 → sufficient=false.
 
-판정 기준:
+전체 충분성(`sufficient`) 판정 기준:
 - 질문에 등장하는 각 토픽/엔티티에 대해 답변에 쓸 만한 근거가 검색 결과에 있으면 sufficient=true.
 - 핵심 토픽 자료가 누락되었거나, 주제가 완전히 빗나갔으면 sufficient=false.
 - "직접 비교/요약된 단일 문서"의 부재는 불충분 사유가 **아닙니다**.
+- **개별 문서가 무관해도 다른 문서들이 토픽을 커버하면 sufficient=true** (개별 무관도 OR 합산이 아님).
+
+개별 문서 관련성(`per_doc`) 판정 기준:
+- 각 문서를 입력 순서대로(`[i]` 번호) 1개씩 평가.
+- 문서가 질문의 어떤 토픽이라도 답변 근거로 직접 활용 가능하면 `relevant=true`.
+- 주제가 다르거나 표면 단어만 겹치고 내용이 무관하면 `relevant=false`.
+- 짧은 사유(`reason`, 한국어 1구절)도 함께. 예: "ES kNN 튜닝 핵심 다룸", "Logstash 설치만 다룸 — 무관".
+- **모든 입력 문서에 대해 빠짐없이 항목을 반환**할 것 (입력이 N개면 출력 배열도 N개).
 
 JSON으로만 응답:
-{{"sufficient": true|false, "reason": "한 문장 이유"}}
+{{"sufficient": true|false, "reason": "한 문장 이유", "per_doc": [{{"index": 1, "relevant": true|false, "reason": "한 구절"}}, {{"index": 2, "relevant": true|false, "reason": "한 구절"}}]}}
 
 [질문]
 {query}

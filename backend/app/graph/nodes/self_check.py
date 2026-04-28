@@ -33,15 +33,39 @@ async def self_check(state: RAGState) -> dict:
     sufficient = bool(data.get("sufficient", False))
     reason = data.get("reason") or ""
 
-    seen_titles: set[str] = set()
-    titles: list[str] = []
-    for d in candidates:
-        t = (d.get("title") or "").strip()
-        if not t or t in seen_titles:
+    # Aggregate per-doc verdicts to per-title (1-indexed match render_docs_brief).
+    # Same title can appear in multiple chunks; mark title relevant if ANY chunk
+    # was judged relevant. LLM returned items may be missing/malformed — default
+    # to relevant=True so unjudged docs aren't penalized in the UI.
+    per_doc_raw = data.get("per_doc") or []
+    idx_to_relevant: dict[int, bool] = {}
+    for item in per_doc_raw:
+        if not isinstance(item, dict):
             continue
-        seen_titles.add(t)
-        titles.append(t)
-    titles_block = "\n" + "\n".join(f"  • {t}" for t in titles) if titles else ""
+        idx = item.get("index")
+        if not isinstance(idx, int):
+            continue
+        idx_to_relevant[idx] = bool(item.get("relevant", True))
+
+    title_verdict: dict[str, bool] = {}
+    title_order: list[str] = []
+    for i, d in enumerate(candidates, 1):
+        t = (d.get("title") or "").strip()
+        if not t:
+            continue
+        chunk_relevant = idx_to_relevant.get(i, True)
+        if t not in title_verdict:
+            title_order.append(t)
+            title_verdict[t] = chunk_relevant
+        else:
+            title_verdict[t] = title_verdict[t] or chunk_relevant
+
+    if title_order:
+        titles_block = "\n" + "\n".join(
+            f"  {'✓' if title_verdict[t] else '✗'} {t}" for t in title_order
+        )
+    else:
+        titles_block = ""
 
     update: dict = {
         "sufficient": sufficient,
