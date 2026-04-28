@@ -429,18 +429,20 @@ END
   - 불충분 + retry < `RETRIEVAL_MAX_RETRY` → **`query_variate`** → `hybrid_retrieve` 재실행 (6차: 변형 노드 삽입)
   - 불충분 + retry 한도 도달 → **`generate`** ("해당 정보를 찾을 수 없습니다."). 6차에서 `general_chat` 폴백 제거 — 도메인 grounded-only 정책: ES 코퍼스에 답이 없으면 일반 LLM 지식으로 폴백 안 함
 - **단락**: candidates 비어 있으면 LLM 호출 없이 즉시 `sufficient=False`, `retry_count += 1`
+- **합성 쿼리 충분성 원칙**: 원본 질문에 비교/차이/요약/번역 같은 합성 동사가 포함된 경우, 충분성은 **각 토픽별 근거 유무**로 판단. "두 토픽을 직접 비교한 단일 문서"의 부재는 불충분 사유가 아님 — 합성은 답변 단계 LLM이 수행. (예: "ES와 Kafka 비교"에서 ES 특징 문서 + Kafka 특징 문서가 모두 있으면 sufficient=true)
 - **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분` + 가져온 문서 `title` 목록 (중복 제거)
 
 #### [7b] query_variate (6차 신규, retry 사이클 안)
 - **언제 호출되나?**: `self_check` 불충분 + retry 한도 미도달 시 `hybrid_retrieve` 직전에 끼어듦 (`retry_count > 0`일 때만 의미)
 - **입력**: 이전 `rewritten_queries` (BM25 키워드) + `semantic_queries` + `sufficiency_reason` + `retry_count`
 - **출력**: 새 `rewritten_queries` + 새 `semantic_queries` (각 sub-query마다 병렬 LLM 호출)
-- **프롬프트 (`QUERY_VARIATE`)**: 5가지 전략 명시
+- **프롬프트 (`QUERY_VARIATE`)**: 5가지 전략 명시 + 합성 동사 금지 원칙
   - **BROADEN**: 너무 구체적인 단어 제거, 일반 개념으로
   - **SYNONYMS**: 동의어/별칭으로 치환
-  - **DIFFERENT ANGLE**: 사용 사례·설정·내부동작·비교 등 다른 측면
+  - **DIFFERENT ANGLE**: **같은 토픽의** 다른 측면(사용 사례·설정·내부동작·아키텍처·성능). cross-entity 비교는 금지
   - **ADD DOMAIN CONTEXT**: 누락된 `Elasticsearch`/`Kafka` 도메인 단어 보강
   - **DECOMPOSE FURTHER**: 긴 쿼리에서 핵심 1개 추출
+  - **합성 동사 금지(`QUERY_REWRITE`와 동일 원칙)**: 비교/차이/요약/번역/정리 등은 검색 대상이 아님. 입력 sub-query가 (decompose 누수로) 두 엔티티를 담고 있어도 첫번째/주요 엔티티 1개만 검색. 출력에서 `"differences between X and Y"`, `"comparison of X and Y"`, `"X vs Y"` 형태 절대 금지
 - **방어 로직**: 변형 결과가 이전과 동일/빈 값이면 이전 값 재사용 → 루프 안전
 - **UI 표시**:
   ```

@@ -220,19 +220,26 @@ JSON으로만 응답:
 
 QUERY_VARIATE = """The previous Elasticsearch search yielded INSUFFICIENT evidence. You must rewrite the search query from a DIFFERENT ANGLE so the retry has a better chance of hitting relevant documents.
 
+CRITICAL — synthesis verbs are NOT search targets:
+The retrieval layer fetches evidence about ONE topic at a time. Words like compare/difference/contrast/vs/summarize/translate/organize (Korean: 비교/차이/대비/vs/요약/정리/번역) are LLM tasks at answer-generation time — they are NOT keywords to retrieve documents with.
+- The previous query and previous semantic phrase MUST be treated as describing a single topic. Even if the original user question was "compare X and Y", the input to YOU is already a single-topic sub-query because `query_decompose` split it. Stay on that single topic.
+- NEVER produce "comparison of X and Y", "differences between X and Y", "X vs Y", or any cross-entity phrase. There is no "comparison document"; comparison is performed by the LLM after retrieval.
+- If the previous query somehow contained two entities, narrow it to the FIRST/PRIMARY entity only.
+
 Variation strategies (pick whichever fits the failure reason):
 - BROADEN: drop overly specific terms; use more general concepts.
 - SYNONYMS / ALIASES: replace key terms with synonyms or alternate technical names.
-- DIFFERENT ANGLE: focus on a related sub-aspect (use cases, configuration, internals, comparison).
+- DIFFERENT ANGLE: focus on a related sub-aspect of the SAME topic (use cases, configuration, internals, architecture, performance). NOT cross-entity comparison.
 - ADD DOMAIN CONTEXT: prepend "Elasticsearch" / "Kafka" if the previous query was missing it.
 - DECOMPOSE FURTHER: extract a single core concept from a long query.
 
 The new query MUST be DIFFERENT from the previous query. Do not return the same string.
 
 Output rules (same as initial rewrite):
-- "keywords": English BM25 keywords, 2~6 space-separated terms.
-- "semantic": English noun phrase 4~12 tokens. NOT a complete sentence. NOT a hypothetical answer (no "X is …", "X provides …").
-  Allowed forms: "definition of X", "mechanism of X", "X performance tuning", "how X works", "differences between X and Y".
+- "keywords": English BM25 keywords, 2~6 space-separated terms. Single topic only.
+- "semantic": English noun phrase 4~12 tokens. NOT a complete sentence. NOT a hypothetical answer (no "X is …", "X provides …"). Single topic only.
+  Allowed forms: "definition of X", "mechanism of X", "X performance tuning", "how X works", "internals of X", "X configuration options".
+  FORBIDDEN forms: "differences between X and Y", "comparison of X and Y", "X vs Y", "X versus Y".
 
 Inputs:
 [Previous keywords] {prev_keywords}
@@ -247,9 +254,17 @@ Respond with ONLY a JSON object:
 
 SELF_CHECK = """다음 질문에 대해 검색된 문서들이 답변 근거로 충분한지 판단하세요.
 
+핵심 원칙 — 합성(synthesis)은 LLM이 답변 단계에서 수행:
+질문에 "비교/차이/대비/vs/요약/정리/번역" 같은 합성 동사가 포함되어 있더라도, **검색은 토픽별로 따로 수행되었고, 합성은 답변 생성 단계의 LLM이 담당**합니다.
+따라서 충분성 판단은 **"각 토픽에 대한 근거가 검색 결과에 있는가?"** 로 해야 하며, **"문서가 두 토픽을 직접 비교하는가?"** 가 아닙니다.
+- 예: 질문이 "Elasticsearch와 Kafka 비교해줘"이고, 검색 결과에 Elasticsearch 특징을 다룬 문서 + Kafka 특징을 다룬 문서가 각각 충분히 있다면 → **sufficient=true** (LLM이 답변 단계에서 두 자료를 보고 비교).
+- 두 토픽 중 한쪽 자료만 있고 다른 쪽이 누락되었다면 → sufficient=false.
+- 질문이 단일 토픽인데 그 토픽에 대한 근거가 부족하면 → sufficient=false.
+
 판정 기준:
-- 문서 내용이 질문의 핵심 정보를 직접 다루면 sufficient=true.
-- 주제가 다르거나 부분적이라 답변이 불가능하면 sufficient=false.
+- 질문에 등장하는 각 토픽/엔티티에 대해 답변에 쓸 만한 근거가 검색 결과에 있으면 sufficient=true.
+- 핵심 토픽 자료가 누락되었거나, 주제가 완전히 빗나갔으면 sufficient=false.
+- "직접 비교/요약된 단일 문서"의 부재는 불충분 사유가 **아닙니다**.
 
 JSON으로만 응답:
 {{"sufficient": true|false, "reason": "한 문장 이유"}}
