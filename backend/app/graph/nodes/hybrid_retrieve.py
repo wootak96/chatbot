@@ -62,7 +62,20 @@ async def hybrid_retrieve(state: RAGState) -> dict:
             seen.add(key)
             merged.append(d)
 
+    seen_titles: set[str] = set()
+    titles: list[str] = []
+    for d in merged:
+        t = (d.get("title") or "").strip()
+        if not t or t in seen_titles:
+            continue
+        seen_titles.add(t)
+        titles.append(t)
+    titles_block = "\n" + "\n".join(f"  • {t}" for t in titles) if titles else ""
+
     return {
         "candidates": merged,
-        PROGRESS_KEY: f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)",
+        PROGRESS_KEY: (
+            f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)"
+            f"{titles_block}"
+        ),
     }

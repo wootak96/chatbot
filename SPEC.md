@@ -419,7 +419,7 @@ END
 - **처리**: zip으로 (BM25 키워드, semantic 문장, indices) 트리플 → sub-query별 `hybrid_search(bm25_query_text=..., semantic_query_text=..., indices=...)` 한 번의 RRF 요청. 결과 merge + `id`/`url` dedup
 - **방어 로직**: `semantic_queries` 길이가 짧으면 매칭되는 BM25 텍스트로 패딩(예: rewrite 스킵 시 sub_queries 직사용)
 - **출력**: `candidates: list[Document]` (`RETRIEVAL_TOP_K * sub-query` 상한 내)
-- **UI 표시**: `📚 Knowledge Base 검색 중.. (N건 발견)`
+- **UI 표시**: `📚 Knowledge Base 검색 중.. (N건 발견)` + 가져온 문서 `title` 목록 (중복 제거, `• title` 형태). 디버깅 편의를 위해 `title` 필드만 노출 (URL/excerpt/score 등은 표시 안 함)
 
 #### [7] self_check (6차에서 fallback 정책 변경)
 - **입력**: `resolved_query` + `candidates`
@@ -540,6 +540,9 @@ class RAGState(TypedDict):
 🏷️  메타데이터 필터 추출 중...
 🧭 인덱스 라우팅: elasticsearch
 📚 Knowledge Base 검색 중.. (38건 발견)
+  • Reciprocal Rank Fusion | Elasticsearch Guide
+  • Hybrid search with RRF | Elasticsearch Guide
+  • BM25 similarity | Elasticsearch Guide
 🔎 검색 결과 검증 중... ✓ 충분
   • Reciprocal Rank Fusion | Elasticsearch Guide
   • Hybrid search with RRF | Elasticsearch Guide
