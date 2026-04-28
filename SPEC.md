@@ -409,6 +409,9 @@ END
 - **입력**: 각 `rewritten_queries[i]`
 - **출력**: `target_indices_per_query: list[list[str]]` — sub-query 순서와 매칭
 - **역할**: 각 서브쿼리마다 LLM에게 어느 인덱스에 검색할지 질의 (`asyncio.gather`로 병렬). 응답이 비어 있거나 파싱 실패 시 둘 다로 안전 폴백
+- **인덱스 description (`INDEX_ROUTE` 프롬프트)**:
+  - `elasticsearch`: Elasticsearch 공식문서. 검색/색인/RRF/kNN/매핑, **8 ~ 9 버전 트러블슈팅**, **업그레이드 가이드(8.x → 9.x 마이그레이션)**, **REST API 레퍼런스(엔드포인트/파라미터/요청·응답 스펙)** 등
+  - `kafka`: Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈 등
 - **UI 표시**: `🧭 인덱스 라우팅 중...`
 
 #### [6] hybrid_retrieve

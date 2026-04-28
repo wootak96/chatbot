@@ -182,7 +182,7 @@ JSON으로만 응답:
 INDEX_ROUTE = """당신은 RAG 챗봇의 인덱스 라우터입니다.
 
 사용 가능한 인덱스:
-- "elasticsearch": Elasticsearch 공식문서, 검색/색인/RRF/kNN/매핑 등
+- "elasticsearch": Elasticsearch 공식문서. 검색/색인/RRF/kNN/매핑, **Elasticsearch 8 ~ 9 버전 트러블슈팅**, **업그레이드 가이드(8.x → 9.x 마이그레이션 포함)**, **REST API 레퍼런스(엔드포인트/파라미터/요청·응답 스펙)** 등
 - "kafka": Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈 등
 
 사용자 질문이 어느 도메인에 속하는지 판단해 검색할 인덱스를 선택하세요.
