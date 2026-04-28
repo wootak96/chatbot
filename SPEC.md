@@ -415,7 +415,7 @@ END
 - **처리**: zip으로 (BM25 키워드, semantic 문장, indices) 트리플 → sub-query별 `hybrid_search(bm25_query_text=..., semantic_query_text=..., indices=...)` 한 번의 RRF 요청. 결과 merge + `id`/`url` dedup
 - **방어 로직**: `semantic_queries` 길이가 짧으면 매칭되는 BM25 텍스트로 패딩(예: rewrite 스킵 시 sub_queries 직사용)
 - **출력**: `candidates: list[Document]` (`RETRIEVAL_TOP_K * sub-query` 상한 내)
-- **UI 표시**: `📚 Elasticsearch 검색 중... (N건 발견)`
+- **UI 표시**: `📚 Knowledge Base 검색 중.. (N건 발견)`
 
 #### [7] self_check (6차에서 fallback 정책 변경)
 - **입력**: `resolved_query` + `candidates`
@@ -425,7 +425,7 @@ END
   - 불충분 + retry < `RETRIEVAL_MAX_RETRY` → **`query_variate`** → `hybrid_retrieve` 재실행 (6차: 변형 노드 삽입)
   - 불충분 + retry 한도 도달 → **`generate`** ("해당 정보를 찾을 수 없습니다."). 6차에서 `general_chat` 폴백 제거 — 도메인 grounded-only 정책: ES 코퍼스에 답이 없으면 일반 LLM 지식으로 폴백 안 함
 - **단락**: candidates 비어 있으면 LLM 호출 없이 즉시 `sufficient=False`, `retry_count += 1`
-- **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분`
+- **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분` + 가져온 문서 `title` 목록 (중복 제거)
 
 #### [7b] query_variate (6차 신규, retry 사이클 안)
 - **언제 호출되나?**: `self_check` 불충분 + retry 한도 미도달 시 `hybrid_retrieve` 직전에 끼어듦 (`retry_count > 0`일 때만 의미)
@@ -533,8 +533,11 @@ class RAGState(TypedDict):
          • semantic: comparison between RRF and other hybrid retrieval fusion methods
 🏷️  메타데이터 필터 추출 중...
 🧭 인덱스 라우팅: elasticsearch
-📚 Elasticsearch 검색 중... (38건 발견)
+📚 Knowledge Base 검색 중.. (38건 발견)
 🔎 검색 결과 검증 중... ✓ 충분
+  • Reciprocal Rank Fusion | Elasticsearch Guide
+  • Hybrid search with RRF | Elasticsearch Guide
+  • BM25 similarity | Elasticsearch Guide
 
 ─────────────────────────────────────
 

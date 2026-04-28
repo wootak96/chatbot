@@ -64,5 +64,5 @@ async def hybrid_retrieve(state: RAGState) -> dict:
 
     return {
         "candidates": merged,
-        PROGRESS_KEY: f"📚 Elasticsearch 검색 중... ({len(merged)}건 발견)",
+        PROGRESS_KEY: f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)",
     }

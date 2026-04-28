@@ -33,10 +33,23 @@ async def self_check(state: RAGState) -> dict:
     sufficient = bool(data.get("sufficient", False))
     reason = data.get("reason") or ""
 
+    seen_titles: set[str] = set()
+    titles: list[str] = []
+    for d in candidates:
+        t = (d.get("title") or "").strip()
+        if not t or t in seen_titles:
+            continue
+        seen_titles.add(t)
+        titles.append(t)
+    titles_block = "\n" + "\n".join(f"  • {t}" for t in titles) if titles else ""
+
     update: dict = {
         "sufficient": sufficient,
         "sufficiency_reason": reason,
-        PROGRESS_KEY: f"🔎 검색 결과 검증 중... {'✓ 충분' if sufficient else '✗ 불충분'}",
+        PROGRESS_KEY: (
+            f"🔎 검색 결과 검증 중... {'✓ 충분' if sufficient else '✗ 불충분'}"
+            f"{titles_block}"
+        ),
     }
     if not sufficient:
         update["retry_count"] = state.get("retry_count", 0) + 1
