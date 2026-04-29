@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
+from app.graph.nodes.index_route import route_query
 from app.graph.state import RAGState
 from app.services.elasticsearch_client import list_titles
 
@@ -23,7 +24,8 @@ async def es_list(state: RAGState) -> dict:
             PROGRESS_KEY: "📚 문서 목록 조회 중... (title 필드 부재로 스킵)",
         }
 
-    indices = s.all_indices
+    query = state.get("resolved_query") or state["current_query"]
+    indices = await route_query(query)
     by_index = await list_titles(indices=indices, size=30)
     total = sum(len(v) for v in by_index.values())
 

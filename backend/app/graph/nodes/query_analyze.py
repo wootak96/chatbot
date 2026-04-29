@@ -21,9 +21,25 @@ _DOMAIN_PATTERN = re.compile(
     r"analyzer|tokenizer|embedding|임베딩|dense_vector|sparse_vector)"
 )
 
+# Meta-collection safety net: questions about the chatbot's document
+# collection itself (count / list / total) should always be `question`,
+# even when no specific domain token like "kafka" or "ES" is mentioned.
+# search_intent will then classify them as count/list and route_query
+# falls back to all indices on ambiguity (INDEX_ROUTE prompt rule).
+_META_COLLECTION_PATTERN = re.compile(
+    r"(전체\s*문서|사내\s*문서|사내\s*자료|"
+    r"문서\s*(목록|리스트|개수|갯수|몇|얼마)|"
+    r"몇\s*(개|건)|총\s*(몇|\d+)|"
+    r"어떤\s*문서|문서들?\s*(뭐|뭔|어떤))"
+)
+
 
 def _has_domain_term(text: str) -> bool:
     return bool(_DOMAIN_PATTERN.search(text or ""))
+
+
+def _has_meta_collection_term(text: str) -> bool:
+    return bool(_META_COLLECTION_PATTERN.search(text or ""))
 
 
 async def query_analyze(state: RAGState) -> dict:
@@ -45,8 +61,11 @@ async def query_analyze(state: RAGState) -> dict:
     if intent not in ("question", "chitchat", "general"):
         intent = "question"
 
-    # Override LLM misclassification when domain keywords are obviously present.
-    if intent in ("chitchat", "general") and _has_domain_term(query):
+    # Override LLM misclassification when domain keywords or meta-collection
+    # phrasing ("전체 문서 몇 개?", "사내 자료 보여줘") are obviously present.
+    if intent in ("chitchat", "general") and (
+        _has_domain_term(query) or _has_meta_collection_term(query)
+    ):
         intent = "question"
 
     return {

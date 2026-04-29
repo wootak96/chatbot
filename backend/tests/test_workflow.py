@@ -192,16 +192,24 @@ async def test_workflow_routes_per_subquery(stub_judge, stub_generator):
 
 @pytest.mark.asyncio
 async def test_workflow_search_intent_count(stub_judge, monkeypatch):
-    """count search_intent skips RRF and returns counts via es_count."""
+    """count search_intent routes to the relevant index and returns its count.
+
+    For "ES 문서 몇 개?" the router picks elasticsearch only — the kafka
+    index must not appear in the count or the final answer.
+    """
     stub_judge(
         [
-            '{"intent": "question", "resolved_query": "ES 문서 몇 개?"}',
-            '{"search_intent": "count"}',
+            '{"intent": "question"}',                # query_analyze
+            '{"search_intent": "count"}',            # search_intent
+            '{"indices": ["elasticsearch"]}',        # route_query inside es_count
         ]
     )
 
+    captured: dict = {}
+
     async def fake_count(*, indices, metadata_filters=None, client=None):
-        return {"elasticsearch_docs": 50, "kafka_docs": 30}
+        captured["indices"] = list(indices)
+        return {idx: 50 for idx in indices}
 
     from app.graph.nodes import es_count as es_count_mod
 
@@ -212,10 +220,76 @@ async def test_workflow_search_intent_count(stub_judge, monkeypatch):
     final = await workflow.ainvoke(state)
 
     assert final["search_intent"] == "count"
-    assert "80" in final["final_answer"]  # total
+    assert captured["indices"] == ["elasticsearch_docs"]
+    assert "50" in final["final_answer"]
     assert "elasticsearch_docs" in final["final_answer"]
-    assert "kafka_docs" in final["final_answer"]
+    assert "kafka_docs" not in final["final_answer"]
     assert final["sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_search_intent_count_kafka(stub_judge, monkeypatch):
+    """Routing to kafka only excludes the elasticsearch index from the count."""
+    stub_judge(
+        [
+            '{"intent": "question"}',
+            '{"search_intent": "count"}',
+            '{"indices": ["kafka"]}',
+        ]
+    )
+
+    captured: dict = {}
+
+    async def fake_count(*, indices, metadata_filters=None, client=None):
+        captured["indices"] = list(indices)
+        return {idx: 42 for idx in indices}
+
+    from app.graph.nodes import es_count as es_count_mod
+
+    monkeypatch.setattr(es_count_mod, "count_documents", fake_count)
+
+    workflow = build_workflow()
+    state = initial_state([{"role": "user", "content": "kafka 문서 몇 개야?"}])
+    final = await workflow.ainvoke(state)
+
+    assert captured["indices"] == ["kafka_docs"]
+    assert "42" in final["final_answer"]
+    assert "kafka_docs" in final["final_answer"]
+    assert "elasticsearch_docs" not in final["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_search_intent_count_ambiguous_searches_both(
+    stub_judge, monkeypatch
+):
+    """Meta-collection question (no domain keyword) short-circuits to both
+    indices without an LLM routing call.
+    """
+    # No third stub entry — route_query short-circuits when no domain term
+    # is present in the query, so the routing LLM call is skipped entirely.
+    stub_judge(
+        [
+            '{"intent": "question"}',
+            '{"search_intent": "count"}',
+        ]
+    )
+
+    captured: dict = {}
+
+    async def fake_count(*, indices, metadata_filters=None, client=None):
+        captured["indices"] = list(indices)
+        return {"elasticsearch_docs": 50, "kafka_docs": 30}
+
+    from app.graph.nodes import es_count as es_count_mod
+
+    monkeypatch.setattr(es_count_mod, "count_documents", fake_count)
+
+    workflow = build_workflow()
+    state = initial_state([{"role": "user", "content": "전체 문서 몇 개?"}])
+    final = await workflow.ainvoke(state)
+
+    assert set(captured["indices"]) == {"elasticsearch_docs", "kafka_docs"}
+    assert "80" in final["final_answer"]
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from app import prompts
 from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
 from app.graph.nodes._helpers import llm_json
+from app.graph.nodes.query_analyze import _has_domain_term
 from app.graph.state import RAGState
 from app.services.llm_factory import get_judge_llm
 
@@ -29,6 +30,21 @@ async def _route_one(query: str, alias_map: dict[str, str]) -> list[str]:
     if not valid:
         valid = list(alias_map.keys())  # fallback: search both for recall
     return [alias_map[a] for a in valid]
+
+
+async def route_query(query: str) -> list[str]:
+    """Single-query index routing, reused by es_count / es_list paths.
+
+    Short-circuits to all indices when the query contains no domain keyword
+    at all (meta-collection questions like "전체 문서 몇 개?", "사내 자료
+    얼마나?"), avoiding an unnecessary LLM call and a known LLM bias toward
+    picking the first listed index. Otherwise delegates to the same
+    INDEX_ROUTE prompt as the multi-sub-query routing.
+    """
+    settings = get_settings()
+    if not _has_domain_term(query):
+        return list(settings.index_alias_map.values())
+    return await _route_one(query, settings.index_alias_map)
 
 
 async def index_route(state: RAGState) -> dict:

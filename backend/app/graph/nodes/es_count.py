@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
+from app.graph.nodes.index_route import route_query
 from app.graph.state import RAGState
 from app.services.elasticsearch_client import count_documents
 
 
 async def es_count(state: RAGState) -> dict:
-    s = get_settings()
-    indices = s.all_indices
+    query = state.get("resolved_query") or state["current_query"]
+    indices = await route_query(query)
     counts = await count_documents(indices=indices)
     total = sum(counts.values())
 
