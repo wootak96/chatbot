@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     es_field_title: str = "title"
     es_field_content: str = "content"
-    es_field_semantic: str = "content_semantic"
+    es_field_semantic: str = "content_embedding"
     es_field_url: str = "url"
 
     retrieval_rank_window: int = 50
