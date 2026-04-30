@@ -1,6 +1,6 @@
 # RAG 챗봇 프로젝트 SPEC
 
-> **마지막 갱신: 2026-04-30 (8차).** 초기 SPEC 대비 변경 + 2~8차 라운드 보강. 자세한 내역은 각 섹션 참조.
+> **마지막 갱신: 2026-04-30 (9차).** 초기 SPEC 대비 변경 + 2~9차 라운드 보강. 자세한 내역은 각 섹션 참조.
 >
 > **1차 변경 (구조)**
 > - 인덱스: `docs-*` 패턴 → 실제 인덱스 `elasticsearch_docs`, `kafka_docs` 두 개
@@ -82,6 +82,16 @@
 > - **`CHITCHAT`/`GENERAL_CHAT` 정체성 갱신**: "Elasticsearch / Kafka 등" → "Elasticsearch / Kafka 공식문서 + Confluence 사내 위키"로 명시
 > - **`workflow.py` SSE 직렬 정책 유지**: route/rewrite/metadata 구간은 데이터 의존성상 병렬화 가능하지만, 진행 메시지 race를 막기 위해 의도적 직렬 유지
 > - 테스트: 71/71 통과 (65 + confluence fan-out 1 + per-index rewrite 1 + count 3-인덱스 1 + 도메인 패턴 confluence 2)
+>
+> **9차 변경 (per-user 채팅 로그 + 디버깅 intent)**
+> - **`{user_id}_logs` 인덱스 도입 (per-user 채팅 로그)**: 로그인 사용자별 ES 인덱스 생성. 매 턴마다 질문/답변/intent/search_intent/sub_queries/target_indices/search_plans/candidates/sufficient/sources/progress_log(UI에 표시된 trace 그대로) 한 문서로 저장. 인덱스명은 `sanitize_user_id(user_id) + "_logs"` (lowercase + `[a-z0-9_-]`만 허용, 그 외는 `_`로 치환). 신규 서비스 모듈 `app/services/log_store.py` (sanitize / ensure_log_index / save_turn / fetch_recent_turns). 저장은 best-effort — ES 실패 시 warning 로그만 남기고 채팅 응답 흐름을 막지 않음
+> - **4번째 intent `debugging` 추가**: 사용자가 직전 답변에 대해 "왜 이렇게 답했어?", "근거가 뭐야?", "방금 답변 어디서 가져왔어?" 같이 챗봇 자신의 응답을 메타 질의할 때 분류. `Intent = Literal["question", "chitchat", "general", "debugging"]`. `query_analyze`의 LLM 분류 + 정규식 safety net 양쪽으로 검출
+> - **debug 정규식 (`_DEBUG_ANSWER_REF` + `_DEBUG_META_QUESTION` co-occurrence + `_DEBUG_STRONG`)**: 단어 순서 독립적인 검출 — "왜 답변이 이상해?" / "답변이 왜 이래?" / "왜 Kafka 답변이 이렇게 나왔어?" 모두 매칭. 도메인 단어가 포함돼도 메타 질의는 debugging이 우선 (사용자가 새 정보가 아니라 과거 답변에 대해 묻는 것이므로). 강한 standalone 패턴("디버깅", "왜 이렇게 판단했어", "근거가 뭐야") 따로 매칭
+> - **신규 노드 `debug_explain`**: `{user_id}_logs`에서 최근 **3턴**을 시간 역순으로 가져와 `DEBUG_EXPLAIN` 프롬프트로 LLM에 전달. LLM이 사용자 질의가 어느 턴을 가리키는지 판단(주제·위치·일반 질의) → 해당 턴의 trace를 한국어로 설명. `[Turn 1]` (최신) / `[Turn 2]` / `[Turn 3]` 표기. user_id 미전송 시 / 로그 0건일 때 graceful 안내 메시지. generate / general_chat과 동일하게 토큰 스트리밍 (`on_chat_model_stream`)
+> - **새 워크플로우 분기**: `query_analyze → debugging → debug_explain → END`. 검색 파이프라인 완전 우회 (decompose/route/rewrite/retrieve 모두 스킵)
+> - **API 변경**: `ChatRequest`에 `user_id: str | None` 필드 추가, 프론트엔드(`web.py`)는 URL의 `user_id` 파라미터를 POST body에 동봉. `chat.py`가 streaming 중 progress message + LLM 응답 토큰을 누적 → SSE 종료 후 `save_turn(user_id, doc)` 호출 (debugging intent는 자기 자신을 로그에 안 남기도록 skip)
+> - **`{user_id}_logs` 매핑**: `keyword`/`text`/`date`/`object` 혼합. `progress_log`는 텍스트로 저장(검색·디버깅 가시성). search_plans / candidates / sources는 nested object
+> - 테스트: 95/95 통과 (71 + log_store 17 + debug intent 3 + debug_explain 3 + workflow debug path 1)
 
 ## 1. 프로젝트 개요
 
@@ -307,11 +317,13 @@ retriever.rrf(
 START
   │
   ▼
-[1] query_analyze     ─── 3-intent 분류 (question/chitchat/general) + 도메인 단어 안전망 (7차: intent only로 단순화)
+[1] query_analyze     ─── 4-intent 분류 (question/chitchat/general/debugging) + 도메인·debug 안전망 (9차: debugging 추가)
   │
   ├─ chitchat ──────────────────────────────────────────▶ [10] generate (CHITCHAT) ──▶ END
   │
   ├─ general  ──────────────────────────────────────────▶ [11] general_chat ──▶ END
+  │
+  ├─ debugging ─────────────────────────────────────────▶ [12] debug_explain ({user_id}_logs 최근 3턴 분석) ──▶ END
   │
   ▼ question (search)
 [1b] query_reform     ─── history-aware self-contained 재작성 (7차 신규, history 없으면 LLM 스킵)
@@ -515,6 +527,20 @@ END
 - **출력**: 최종 답변 (스트리밍)
 - **UI 표시**: 4차에서 `✍️ 답변 생성 중...` 진행 메시지 제거. 직전 노드(`self_check`) 메시지 후 바로 구분선 → 답변 본문 토큰 스트리밍
 
+#### [12] debug_explain (9차 신규, debugging intent 전용)
+- **언제 호출되나?**: `query_analyze`가 intent를 `debugging`으로 분류한 경우. 검색 파이프라인은 완전히 우회
+- **입력**: `user_id` + `current_query` (또는 `resolved_query`)
+- **처리**:
+  1. `user_id`가 비어 있으면 안내 메시지 후 종료 (per-user 인덱스가 없으면 디버그 불가)
+  2. `fetch_recent_turns(user_id, n=3)`로 최근 3턴을 시간 역순으로 가져옴 (Turn 1 = 가장 최근)
+  3. 0턴이면 "최근 대화 기록이 없어 디버깅할 수 없습니다" 안내 후 종료
+  4. `_render_turns()`로 각 턴의 trace 필드(intent, search_intent, sub_queries, target_indices, search_plans, sufficient, sources, progress_log, final_answer)를 numbered block으로 렌더링
+  5. `DEBUG_EXPLAIN` 프롬프트로 generator LLM에 전달 → LLM이 사용자 질의가 어느 턴을 가리키는지 판단해 한국어로 설명
+- **LLM 판단 가이드 (`DEBUG_EXPLAIN` 프롬프트)**: 주제 참조("Kafka 답변") / 위치 참조("방금", "두 번째") / 일반 질의("왜 이렇게 답했어") → Turn 1 기본
+- **출력**: `final_answer` (스트리밍, `on_chat_model_stream`이 chat.py SSE에 흘림), `sources=[]`
+- **UI 표시**: `🐛 디버깅 모드: 최근 N턴 분석 완료`
+- **로그 저장 정책**: debugging intent의 응답 자체는 `{user_id}_logs`에 저장하지 않음 (재귀적 자기 반영 방지)
+
 #### [11] general_chat (3차 신규, 6차에서 진입 경로 축소)
 - **언제 호출되나?**:
   1. `query_analyze`가 intent를 `general`로 분류한 경우 (도메인 외 질문 직행) — **유일한 진입 경로 (6차)**
@@ -543,8 +569,9 @@ class RAGState(TypedDict):
 
     # 중간 산출물
     resolved_query: str          # 7차: query_reform이 생성 (search 분기일 때만). chitchat/general 경로에서는 미설정 → 다운스트림이 current_query로 폴백
-    intent: Literal["question", "chitchat", "general"]   # 7차: followup 제거 (query_reform이 history-aware로 펼침)
+    intent: Literal["question", "chitchat", "general", "debugging"]   # 7차: followup 제거 / 9차: debugging 추가
     search_intent: Literal["lookup", "count", "list"]   # 6차: ES 질의 형태
+    user_id: str                                                       # 9차: 로그 저장 + debug 컨텍스트 조회용
     sub_queries: list[str]
     target_indices_per_query: list[list[str]]    # sub-query별 인덱스 목록 (index_route 산출, rewrite 입력)
     search_plans: list[SearchPlan]               # 8차: (sub-query × routed-index) 평탄화. rewrite 산출, retrieve/variate 입력
@@ -826,10 +853,12 @@ auto-ever/
     │   │       ├── es_count.py          # count 검색 의도 전용 (6차 신규)
     │   │       ├── es_list.py           # list 검색 의도 전용 (6차 신규)
     │   │       ├── generate.py          # RAG-grounded / chitchat 응답
-    │   │       └── general_chat.py      # 도메인 외 일반 답변 (3차 신규)
+    │   │       ├── general_chat.py      # 도메인 외 일반 답변 (3차 신규)
+    │   │       └── debug_explain.py     # 9차 신규: {user_id}_logs 기반 trace 설명
     │   └── services/
     │       ├── elasticsearch_client.py  # build_rrf_query, hybrid_search
-    │       └── llm_factory.py           # provider switch + ContextVar
+    │       ├── llm_factory.py           # provider switch + ContextVar
+    │       └── log_store.py             # 9차 신규: per-user {user_id}_logs ES 인덱스
     └── tests/
         ├── test_es_query.py
         ├── test_helpers.py
@@ -909,7 +938,8 @@ LOG_LEVEL=INFO
 - `GENERAL_CHAT`: 첫 줄에 *"ℹ️ 사내 문서 범위 밖의 질문이라 일반 지식으로 답변드릴게요."* 안내 + 본 답변. 출처 섹션 만들지 않음
 
 ### 11.3 프롬프트 인벤토리 (8차 기준)
-- `QUERY_ANALYZE` — 3-intent 분류만 (7차: followup 제거 / 8차: 도메인 카테고리 3개로 확장 + Internal-wiki(Confluence) 키워드 17종 추가). 도메인 단어 절대 규칙 + 비교 질문 처리 유지
+- `QUERY_ANALYZE` — 4-intent 분류 (7차: followup 제거 / 8차: 도메인 카테고리 3개로 확장 + Internal-wiki(Confluence) 키워드 17종 추가 / 9차: `debugging` intent 추가). 도메인 단어 절대 규칙 + 비교 질문 처리 유지. debugging vs question 구분 규칙 명시 ("X가 뭐야?" → question, "왜 X 답변이 그래?" → debugging)
+- `DEBUG_EXPLAIN` (9차 신규) — `{user_id}_logs`의 최근 3턴 trace를 받아 사용자가 가리키는 턴을 LLM이 판단하고 한국어로 설명. 주제·위치·일반 참조 모두 처리. `[Turn N]` 형태로 인용
 - `QUERY_REFORM` — history-aware self-contained 재작성 (7차 신규). 지시어 치환 + 생략 보완. 한국어 유지(번역 X). 4개 예시
 - `SEARCH_INTENT_CLASSIFY` — 검색 형태 분류 lookup/count/list (6차 신규)
 - `QUERY_DECOMPOSE` — 서브쿼리 분해 (영문 + JSON, 한국어 도메인 예시 다수)
