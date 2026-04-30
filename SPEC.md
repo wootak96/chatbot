@@ -1,6 +1,6 @@
 # RAG 챗봇 프로젝트 SPEC
 
-> **마지막 갱신: 2026-04-28 (7차).** 초기 SPEC 대비 변경 + 2~7차 라운드 보강. 자세한 내역은 각 섹션 참조.
+> **마지막 갱신: 2026-04-30 (8차).** 초기 SPEC 대비 변경 + 2~8차 라운드 보강. 자세한 내역은 각 섹션 참조.
 >
 > **1차 변경 (구조)**
 > - 인덱스: `docs-*` 패턴 → 실제 인덱스 `elasticsearch_docs`, `kafka_docs` 두 개
@@ -70,6 +70,18 @@
 > - **다운스트림 노드 변경 없음**: `query_decompose`/`query_rewrite`/`metadata_extract`/`self_check`/`generate`/`general_chat` 등은 여전히 `resolved_query` 한 필드만 읽으므로 history 직접 주입 불필요. 멀티턴 의존성을 `query_reform` 한 곳에 집중
 > - **ES `list_titles` 집계 필드 변경**: `terms` aggregation 대상이 `s.es_field_title` → `f"{s.es_field_title}.keyword"`. text 필드는 fielddata 없이 집계 불가 → `.keyword` 서브필드 사용이 표준
 > - 테스트: 65/65 통과 (62 + query_reform 3개)
+>
+> **8차 변경 (Confluence 인덱스 추가 + 인덱스별 언어 정책 + 모든 프롬프트 영문화)**
+> - **`confluence_docs` 인덱스 추가** (3번째 인덱스): 사내 Confluence 위키 한국어 코퍼스. 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 등. 기술 용어는 영어, 나머지는 한국어로 작성된 사내 문서. `config.py`의 `index_alias_map`/`all_indices`에 `"confluence" → "confluence_docs"` 추가
+> - **워크플로우 순서 변경 (`route → rewrite`)**: 기존 `decompose → rewrite → metadata → route → retrieve` → 신규 `decompose → index_route → query_rewrite → metadata_extract → hybrid_retrieve`. **rewrite는 라우팅된 인덱스의 언어 정책에 맞춰 출력해야 하므로 route가 먼저**. ES/Kafka 인덱스(영어 코퍼스)는 영어 BM25/semantic, Confluence 인덱스(한국어 코퍼스)는 한국어 BM25/semantic (기술용어는 영어 유지)
+> - **`SearchPlan` state 도입 + sub-query × index fan-out**: 한 sub-query가 N개 인덱스에 라우팅되면 N개 search_plan으로 분해. 기존 `rewritten_queries`/`semantic_queries` 1차원 배열 폐기, 평탄화된 `search_plans: list[SearchPlan]`로 대체. 각 plan = `(sub_query_idx, sub_query, index, bm25, semantic)`. `hybrid_retrieve`/`query_variate`도 plan 단위로 동작
+> - **`QUERY_REWRITE`/`QUERY_VARIATE` 인덱스별 언어 정책**: `{target_index}` 플레이스홀더 추가. `confluence_docs`이면 한국어 BM25 + 한국어 semantic noun phrase ("X 정의", "X 운영 가이드", "X 동작 원리" 등) 출력, 그 외(`elasticsearch_docs`/`kafka_docs`)는 영어 출력 ("definition of X", "how X works" 등). 두 정책 모두에서 기술용어(Elasticsearch, Kafka, RRF, BM25, kNN, consumer group 등)는 영어 유지
+> - **`INDEX_ROUTE` 프롬프트 확장**: `"confluence"` 옵션 추가, 사내 운영 맥락(회의록/장애 대응/인수인계 등)이 함께 등장하면 공개 인덱스 + confluence 동시 라우팅 가이드 명시
+> - **`QUERY_ANALYZE` 도메인 단어 리스트 + `_DOMAIN_PATTERN` 정규식 확장**: confluence 키워드 17종 추가 (`Confluence`, `컨플루언스`, `위키`, `wiki`, `회의록`, `미팅록`, `미팅 노트`, `운영 가이드/매뉴얼/절차`, `장애 대응/보고`, `인수 인계`, `사내 표준/정책/가이드/매뉴얼/절차`, `팀 위키`). 공백 변동 흡수(`\s*`). confluence-only 질문("회의록 보여줘", "운영 가이드 어디 있어?")이 LLM에서 `general` 오분류돼도 정규식 safety net이 `question`으로 강제 override
+> - **모든 프롬프트의 prose를 영어로 전환** (예시 섹션은 한국어 입력 분포 유지). LLM이 영어 instruction을 더 안정적으로 따른다는 사용자 판단. 챗봇 출력 리터럴은 한국어 보존 ("해당 정보를 찾을 수 없습니다.", "오토에버 클라우드솔루션팀 챗봇" 정체성, "ℹ️ 사내 문서 범위 밖의 질문이라..." 헤더 등). `GENERATE`/`CHITCHAT`/`GENERAL_CHAT`은 첫 줄에 `Respond in Korean.` 명시. `QUERY_REFORM`은 출력이 한국어 문장이므로 "Output in Korean" 명시
+> - **`CHITCHAT`/`GENERAL_CHAT` 정체성 갱신**: "Elasticsearch / Kafka 등" → "Elasticsearch / Kafka 공식문서 + Confluence 사내 위키"로 명시
+> - **`workflow.py` SSE 직렬 정책 유지**: route/rewrite/metadata 구간은 데이터 의존성상 병렬화 가능하지만, 진행 메시지 race를 막기 위해 의도적 직렬 유지
+> - 테스트: 71/71 통과 (65 + confluence fan-out 1 + per-index rewrite 1 + count 3-인덱스 1 + 도메인 패턴 confluence 2)
 
 ## 1. 프로젝트 개요
 
@@ -143,14 +155,17 @@
 
 ### 3.2 인덱스 구조
 
-> 실제 인덱스명/필드명은 `.env`로 분리 (`ES_INDEX_ELASTICSEARCH`, `ES_INDEX_KAFKA`, `ES_FIELD_*`).
+> 실제 인덱스명/필드명은 `.env`로 분리 (`ES_INDEX_ELASTICSEARCH`, `ES_INDEX_KAFKA`, `ES_INDEX_CONFLUENCE`, `ES_FIELD_*`).
 
-#### (a) 현재 운영 매핑 (실측, 2026-04-26)
+#### (a) 현재 운영 매핑 (실측, 2026-04-26 / 8차에서 confluence_docs 추가)
 
 ```yaml
 indices:
-  - elasticsearch_docs   # 50 chunks (BBQ HNSW, dot_product)
-  - kafka_docs           # 50 chunks
+  - elasticsearch_docs   # 50 chunks (BBQ HNSW, dot_product) — 영어 코퍼스 (ES 공식 docs)
+  - kafka_docs           # 50 chunks                          — 영어 코퍼스 (Kafka 공식 docs)
+  - confluence_docs      # 8차 신규                            — 한국어 코퍼스 (사내 Confluence 위키:
+                                                             #   운영 가이드 / 회의록 / 장애 대응 /
+                                                             #   인수인계 / 사내 표준·정책 / 팀 위키)
 
 fields (현재 존재):
   content:           text (copy_to: content_embedding)
@@ -191,10 +206,12 @@ fields:
 - 결합: ES 8.14+ `retriever.rrf` DSL — `rank_window_size=50`, `rank_constant=60`. **하나의 RRF 요청 안에서 BM25 retriever와 semantic retriever가 서로 다른 입력 텍스트를 사용**
 - 초기 후보 수(`RETRIEVAL_TOP_K`): 10건
 
-#### (2) 인덱스 라우팅 (per-sub-query)
-- `index_route` 노드가 **각 sub-query마다** 어느 인덱스(`elasticsearch_docs` / `kafka_docs` / 둘 다)를 검색할지 LLM에 질의
-- `hybrid_retrieve`가 sub-query별 매핑된 인덱스에만 검색 → 결과를 `id`/`url` 기준 merge + dedup
-- LLM 응답이 비어 있거나 파싱 실패 시 **둘 다** 검색으로 안전 폴백
+#### (2) 인덱스 라우팅 (per-sub-query, 8차에서 confluence 추가)
+- `index_route` 노드가 **각 sub-query마다** 어느 인덱스(`elasticsearch_docs` / `kafka_docs` / `confluence_docs` / 그 조합)를 검색할지 LLM에 질의
+- 8차 변경: 라우팅이 **`query_rewrite`보다 먼저 실행**됨. rewrite가 라우팅된 인덱스의 언어 정책에 따라 출력해야 하기 때문
+- `hybrid_retrieve`는 `search_plans` (sub-query × routed-index 페어로 평탄화)를 받아 plan별로 단일 인덱스 검색 → 결과를 `id`/`url` 기준 merge + dedup
+- 도메인 키워드가 전혀 없는 메타 질의(예: "전체 문서 몇 개?")는 LLM 호출 없이 **모든 인덱스로 short-circuit**
+- LLM 응답이 비어 있거나 파싱 실패 시 **모든 인덱스** 검색으로 안전 폴백
 
 #### (3) 메타데이터 필터링
 - LangGraph의 `metadata_extract` 노드에서 쿼리로부터 필터 조건 추출 (현재 전역 1회)
@@ -220,27 +237,39 @@ fields:
 
 **출력**: `sub_queries: list[str]`
 
-### Step 3. Query Rewrite (sub-query별, 이중 출력)
-LLM이 sub-query 1개당 영어 출력 2개를 동시에 생성:
-- **`keywords`** — BM25 lexical 검색용. 영어 핵심어 2~6개 (예: `Elasticsearch RRF reciprocal rank fusion`). 약어 정규화 (ES→Elasticsearch, K8s→Kubernetes), stopword/구두점 제거
-- **`semantic`** — `semantic_text` 벡터 검색용. **질문 의도를 유지하는 영어 명사구** 4~12 토큰. 허용 형태: `"definition of X"`, `"mechanism of X"`, `"X performance tuning"`, `"how X works"`(관계절형 명사구). **가상 답변(HyDE) 형식 금지** — 완성된 평서문(예: *"Elasticsearch is a distributed search engine ..."*)은 출력하지 않음. 환각된 답변이 검색을 오염시키지 않도록 질문결을 보존
-- **합성 동사(synthesis verb) 금지 원칙**: `비교/차이/대비/vs/요약/정리/번역` (compare/difference/contrast/summarize/translate)은 **검색 대상이 아니라 LLM이 답변 생성 단계에서 수행하는 작업**. `query_decompose`가 토픽별로 분해 후 `query_rewrite`는 동사를 떼고 토픽 단위로만 재작성. `"differences between X and Y"`, `"comparison of X and Y"` 같은 비교 명사구는 **검색 쿼리로 출력 금지** — 비교 문서가 코퍼스에 따로 있을 가능성이 낮고, 있어도 토픽별 검색 결과를 LLM이 합성하는 게 원칙
+### Step 3. Index Route (sub-query별) — 8차에서 rewrite보다 먼저
+- 각 sub-query마다 `elasticsearch_docs` / `kafka_docs` / `confluence_docs` / 그 조합 중에서 LLM이 선택
+- 8차 변경: rewrite보다 **먼저** 실행. rewrite가 인덱스 언어 정책에 따라 출력해야 하기 때문
+- **출력**: `target_indices_per_query: list[list[str]]` (sub-query 순서와 매칭)
+- 도메인 키워드 부재 시 LLM 호출 생략하고 모든 인덱스로 short-circuit (`route_query` 헬퍼)
 
-**출력**: `rewritten_queries: list[str]` (= keywords 리스트) + `semantic_queries: list[str]` (= semantic 리스트). 두 리스트 길이 동일
+### Step 4. Query Rewrite (sub-query × routed-index, 인덱스별 언어 정책)
+8차에서 fan-out 구조로 변경: 한 sub-query가 N개 인덱스에 라우팅되면 **N개의 search_plan**으로 분해. 각 plan은 라우팅된 인덱스의 언어 정책에 맞춰 BM25/semantic을 출력.
+
+**인덱스별 언어 정책**:
+- `elasticsearch_docs` / `kafka_docs` (영어 코퍼스): **영어 BM25 + 영어 semantic** (기존 정책)
+- `confluence_docs` (한국어 코퍼스): **한국어 BM25 + 한국어 semantic**. 단 기술용어(Elasticsearch, Kafka, RRF, BM25, kNN, consumer group, broker, partition, mapping, dense_vector 등)는 영어 그대로 유지 — 한국 엔지니어가 사내 문서를 작성할 때 따르는 관행
+
+**출력 필드 (각 plan마다)**:
+- **`bm25`** — BM25 lexical 검색용. 핵심어 2~6개. 약어 정규화 (ES→Elasticsearch, K8s→Kubernetes), stopword/구두점 제거 (영어/한국어 양쪽 stopword 정의)
+- **`semantic`** — `semantic_text` 벡터 검색용. **질문 의도를 유지하는 명사구** 4~12 토큰
+  - 영어 허용 형태: `"definition of X"`, `"mechanism of X"`, `"X performance tuning"`, `"how X works"`
+  - 한국어 허용 형태: `"X 정의"`, `"X 동작 원리"`, `"X 성능 튜닝"`, `"X 운영 가이드"`, `"X 절차"`
+  - **가상 답변(HyDE) 형식 금지** — 완성된 평서문 (영: *"X is …"*, 한: *"X는 …이다"*) 출력 X. 환각된 답변이 검색을 오염시키지 않도록 질문결 보존
+
+- **합성 동사(synthesis verb) 금지 원칙**: `비교/차이/대비/vs/요약/정리/번역` (compare/difference/contrast/summarize/translate)은 **검색 대상이 아니라 LLM이 답변 생성 단계에서 수행하는 작업**. `query_decompose`가 토픽별로 분해 후 `query_rewrite`는 동사를 떼고 토픽 단위로만 재작성. `"differences between X and Y"`, `"comparison of X and Y"`, `"X와 Y 비교"` 같은 비교 명사구는 **검색 쿼리로 출력 금지** — 비교 문서가 코퍼스에 따로 있을 가능성이 낮고, 있어도 토픽별 검색 결과를 LLM이 합성하는 게 원칙
+
+**출력**: `search_plans: list[SearchPlan]`. 각 plan = `{sub_query_idx, sub_query, index, bm25, semantic}`
 **한쪽 누락 시**: 다른 쪽 값으로 폴백. 둘 다 누락 시 원본 sub-query로 폴백 (검색 항상 동작)
 
-### Step 4. Metadata Extract (전역 1회)
+### Step 5. Metadata Extract (전역 1회)
 - 쿼리에서 `source` / `category` / `date_range` 등 필터 조건 추출
 
-### Step 5. Index Route (sub-query별)
-- 각 sub-query마다 `elasticsearch_docs` / `kafka_docs` / 둘 다 중에서 LLM이 선택
-- **출력**: `target_indices_per_query: list[list[str]]` (sub-query 순서와 매칭)
-
-### Step 6. Hybrid Retrieval (sub-query별)
-각 sub-query에 대해 (BM25 키워드, semantic 문장, indices) 트리플로 ES에서 한 번의 RRF 요청 수행:
-- **키워드 검색**: BM25 (`title^2`, `content`) ← `rewritten_queries[i]` (영어 키워드)
-- **의미 검색**: `semantic_text` 필드 자동 임베딩 + kNN ← `semantic_queries[i]` (영어 자연 문장)
-- **RRF**로 결합 → 상위 후보 N건 (sub-query별)
+### Step 6. Hybrid Retrieval (search_plan별 병렬)
+각 search_plan에 대해 (BM25 키워드, semantic 문장, 단일 인덱스) 트리플로 ES에서 한 번의 RRF 요청 수행:
+- **키워드 검색**: BM25 (`title^2`, `content`) ← `plan.bm25` (인덱스 언어 정책에 따라 영어/한국어)
+- **의미 검색**: `semantic_text` 필드 자동 임베딩 + kNN ← `plan.semantic`
+- **RRF**로 결합 → 상위 후보 N건 (plan별)
 
 ES 8.14+ `retriever.rrf` 한 요청으로 끝남:
 
@@ -298,13 +327,15 @@ START
 [3] query_decompose   ─── 복합 쿼리 → 서브쿼리 분해 (1~3개)
   │
   ▼
-[4] query_rewrite     ─── 서브쿼리 → BM25 영어 키워드 + semantic 영어 명사구 (이중 출력)
+[4] index_route       ─── 서브쿼리별 elasticsearch_docs / kafka_docs / confluence_docs / 조합 결정 (8차: rewrite보다 먼저)
   │
   ▼
-[5] metadata_extract  ─── 필터 조건(source/category/date_range) 추출 (전역, 보수적)
+[5] query_rewrite     ─── (sub-query × routed-index)별 fan-out → search_plans
+                          ES/Kafka 인덱스: 영어 BM25 + 영어 semantic
+                          confluence 인덱스: 한국어 BM25 + 한국어 semantic (기술용어는 영어 유지)
   │
   ▼
-[6] index_route       ─── 서브쿼리별 elasticsearch_docs / kafka_docs / 둘 다 결정 (per-sub-query)
+[6] metadata_extract  ─── 필터 조건(source/category/date_range) 추출 (전역, 보수적)
   │
   ▼
 [7] hybrid_retrieve ◀──────────────┐ (cycle: 재시도)
@@ -337,7 +368,9 @@ END
   - `chitchat`: 인사·감사·챗봇 정체성 질문 (검색 불필요)
   - `general`: 도메인 단어가 1개도 없고 직전 대화도 도메인 주제가 아닌 완전 무관한 질문 → `general_chat` 직행
 - **7차 변경 — followup 제거**: 기존 4-intent의 `followup`은 `question`과 동일 경로를 타던 dead distinction이라 제거. 멀티턴 후속도 모두 `question`으로 분류한 뒤 다음 노드(`query_reform`)가 history-aware로 펼침
-- **6차 도메인 안전망 (유지)**: LLM이 잘못 분류해도 `_DOMAIN_PATTERN` 정규식이 도메인 단어(elasticsearch/엘라스틱서치/kafka/카프카/RRF/BM25/semantic/시맨틱/kNN/consumer/topic/partition/broker/index/인덱스/shard/샤드/embedding/임베딩 등) 검출 시 `general`/`chitchat` → `question`으로 강제 override
+- **6차 도메인 안전망 + 8차 confluence 확장**: LLM이 잘못 분류해도 `_DOMAIN_PATTERN` 정규식이 도메인 단어 검출 시 `general`/`chitchat` → `question`으로 강제 override. 두 그룹으로 구성:
+  - Public-tech: elasticsearch/엘라스틱서치/kafka/카프카/RRF/BM25/semantic/시맨틱/kNN/consumer/topic/partition/broker/index/인덱스/shard/샤드/embedding/임베딩 등
+  - Internal-wiki (8차 추가): confluence/컨플루언스/위키/wiki/회의록/미팅록/미팅 노트/운영 가이드/운영 매뉴얼/운영 절차/장애 대응/장애 보고/인수 인계/사내 표준/사내 정책/사내 가이드/사내 매뉴얼/사내 절차/팀 위키 (공백 변동 흡수: `\s*`)
 - **UI 표시**: `🔍 질문 분석 중... (intent=...)`
 
 #### [1b] query_reform (7차 신규, search 분기 전용)
@@ -376,20 +409,26 @@ END
      └─ How much profit did Google make last year?
   ```
 
-#### [3] query_rewrite (4차: 이중 출력, 영어 번역)
-- **입력**: `sub_queries` (한국어 가능)
-- **출력**: `rewritten_queries: list[str]` (BM25 키워드, 영어) + `semantic_queries: list[str]` (시맨틱 문장, 영어). 두 리스트 길이 동일
-- **프롬프트**: `QUERY_REWRITE` — JSON `{"keywords": "...", "semantic": "..."}`. few-shot 3개(ES RRF, Kafka cg, ES kNN)
+#### [3] query_rewrite (4차: 이중 출력 / 8차: 인덱스별 fan-out + 언어 정책)
+- **입력**: `sub_queries` + `target_indices_per_query` (8차: index_route가 먼저 실행되므로 routing 결과 보유)
+- **처리**: 각 sub-query를 라우팅된 인덱스 수만큼 fan-out → (sub_query × index) 페어로 LLM 호출 병렬 실행
+  - 호출 시 프롬프트에 `{target_index}` 주입 → LLM이 해당 인덱스 언어 정책으로 출력
+  - 한 sub-query가 1개 인덱스에 라우팅되면 plan 1개, N개 인덱스에 라우팅되면 plan N개
+- **출력**: `search_plans: list[SearchPlan]`. 각 plan = `{sub_query_idx, sub_query, index, bm25, semantic}`
+- **인덱스별 언어 정책 (8차)**:
+  - `elasticsearch_docs` / `kafka_docs`: 영어 BM25 + 영어 semantic
+  - `confluence_docs`: 한국어 BM25 + 한국어 semantic (기술용어는 영어 유지)
+- **프롬프트**: `QUERY_REWRITE` — JSON `{"keywords": "...", "semantic": "..."}`. few-shot 9개 (ES RRF, Kafka cg, ES kNN, ES features, Kafka cg 정리, ES 정의, **confluence 운영 가이드/장애 대응/회의록 3개 추가**)
 - **폴백**: 한쪽 비면 다른쪽으로 채우고, 둘 다 비면 원본 sub-query로 폴백
-- **UI 표시** (BM25/semantic 모두 노출):
+- **UI 표시** (인덱스 + BM25/semantic 모두 노출):
   ```
   ✏️ 검색 쿼리 최적화 중...
-     ├─ ES RRF 어떻게?
-     │     • BM25:     Elasticsearch RRF reciprocal rank fusion
-     │     • semantic: definition and mechanism of Reciprocal Rank Fusion in Elasticsearch
-     └─ kafka cg
-           • BM25:     Kafka consumer group
-           • semantic: definition of Kafka consumer group
+     ├─ [elasticsearch_docs] ES 클러스터 운영
+     │     • BM25:     Elasticsearch cluster operations
+     │     • semantic: Elasticsearch cluster operations guide
+     └─ [confluence_docs] ES 클러스터 운영
+           • BM25:     Elasticsearch 클러스터 운영 가이드
+           • semantic: Elasticsearch 클러스터 운영 절차
   ```
 
 #### [4] metadata_extract
@@ -405,21 +444,21 @@ END
   ```
 - **UI 표시**: 진행 메시지 inline
 
-#### [5] index_route
-- **입력**: 각 `rewritten_queries[i]`
+#### [5] index_route (8차: rewrite보다 먼저 실행)
+- **입력**: `sub_queries` (8차: rewrite가 아직 실행 안 됐으므로 원문 sub-query 사용)
 - **출력**: `target_indices_per_query: list[list[str]]` — sub-query 순서와 매칭
-- **역할**: 각 서브쿼리마다 LLM에게 어느 인덱스에 검색할지 질의 (`asyncio.gather`로 병렬). 응답이 비어 있거나 파싱 실패 시 둘 다로 안전 폴백
+- **역할**: 각 서브쿼리마다 LLM에게 어느 인덱스에 검색할지 질의 (`asyncio.gather`로 병렬). 응답이 비어 있거나 파싱 실패 시 모든 인덱스로 안전 폴백. 도메인 키워드 부재 메타 질의는 LLM 호출 없이 모든 인덱스로 short-circuit (`route_query` 헬퍼)
 - **인덱스 description (`INDEX_ROUTE` 프롬프트)**:
-  - `elasticsearch`: Elasticsearch 공식문서. 검색/색인/RRF/kNN/매핑, **8 ~ 9 버전 트러블슈팅**, **업그레이드 가이드(8.x → 9.x 마이그레이션)**, **REST API 레퍼런스(엔드포인트/파라미터/요청·응답 스펙)** 등
-  - `kafka`: Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈, **Kafka KIP(Kafka Improvement Proposals)**, **릴리스 노트**, **JIRA 이슈 트래커**, **Sarama Go 클라이언트**, **Confluent Schema Registry**, **librdkafka C 클라이언트**, **Amazon MSK 개발자 가이드** 등
-- **UI 표시**: `🧭 인덱스 라우팅 중...`
+  - `elasticsearch`: Elasticsearch 공식문서. 검색/색인/RRF/kNN/매핑, **8 ~ 9 버전 트러블슈팅**, **업그레이드 가이드(8.x → 9.x 마이그레이션)**, **REST API 레퍼런스** 등
+  - `kafka`: Apache Kafka 공식문서, 토픽/파티션/컨슈머/프로듀서/스트림즈, **Kafka KIP**, **릴리스 노트**, **JIRA 이슈 트래커**, **Sarama Go 클라이언트**, **Confluent Schema Registry**, **librdkafka C 클라이언트**, **Amazon MSK 개발자 가이드** 등
+  - `confluence` (8차 신규): 사내 Confluence 위키 — **사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 / 사내 프로젝트 메모 / 한국어로 작성된 운영·관리 문서** 등. ES/Kafka 같은 기술 토픽이라도 "사내 운영", "회의록", "인수인계" 같은 사내 맥락이 함께 등장하면 confluence + 해당 공개 인덱스 동시 라우팅
+- **UI 표시**: `🧭 인덱스 라우팅: <alias 요약>`
 
-#### [6] hybrid_retrieve
-- **입력**: `rewritten_queries` (BM25 키워드), `semantic_queries` (시맨틱 문장), `target_indices_per_query`, `metadata_filters`
-- **처리**: zip으로 (BM25 키워드, semantic 문장, indices) 트리플 → sub-query별 `hybrid_search(bm25_query_text=..., semantic_query_text=..., indices=...)` 한 번의 RRF 요청. 결과 merge + `id`/`url` dedup
-- **방어 로직**: `semantic_queries` 길이가 짧으면 매칭되는 BM25 텍스트로 패딩(예: rewrite 스킵 시 sub_queries 직사용)
-- **출력**: `candidates: list[Document]` (`RETRIEVAL_TOP_K * sub-query` 상한 내)
-- **UI 표시**: `📚 Knowledge Base 검색 중.. (N건 발견)` + 가져온 문서 `title` 목록 (중복 제거, `• title` 형태). 디버깅 편의를 위해 `title` 필드만 노출 (URL/excerpt/score 등은 표시 안 함)
+#### [6] hybrid_retrieve (8차: search_plan 단위)
+- **입력**: `search_plans`, `metadata_filters`
+- **처리**: 각 plan에 대해 단일 인덱스로 `hybrid_search(bm25_query_text=plan.bm25, semantic_query_text=plan.semantic, indices=[plan.index])` 한 번의 RRF 요청. `asyncio.gather`로 병렬 실행 후 결과 merge + `id`/`url` dedup
+- **출력**: `candidates: list[Document]` (`RETRIEVAL_TOP_K * len(search_plans)` 상한 내)
+- **UI 표시**: `📚 Knowledge Base 검색 중.. (N건 발견)` + 가져온 문서 `title` 목록 (중복 제거, `• title` 형태). 디버깅 편의를 위해 `title` 필드만 노출
 
 #### [7] self_check (6차에서 fallback 정책 변경)
 - **입력**: `resolved_query` + `candidates`
@@ -433,10 +472,11 @@ END
 - **개별 문서 vs 전체 충분성**: 전체 `sufficient`는 **토픽 커버리지** 기준 (개별 문서 무관도 OR 합산 아님). 개별 문서가 무관해도 다른 문서가 토픽을 커버하면 전체 sufficient=true. 한편 LLM이 `per_doc` 배열로 각 문서 관련성도 판정해 UI에 노출 (디버깅용).
 - **UI 표시**: `🔎 검색 결과 검증 중... ✓ 충분|✗ 불충분` + 문서별 ✓/✗ + `title` 목록 (제목 단위 dedup, 동일 title의 여러 chunk 중 하나라도 relevant면 ✓로 집계)
 
-#### [7b] query_variate (6차 신규, retry 사이클 안)
+#### [7b] query_variate (6차 신규 / 8차: search_plan 단위 + 인덱스 언어 정책 보존)
 - **언제 호출되나?**: `self_check` 불충분 + retry 한도 미도달 시 `hybrid_retrieve` 직전에 끼어듦 (`retry_count > 0`일 때만 의미)
-- **입력**: 이전 `rewritten_queries` (BM25 키워드) + `semantic_queries` + `sufficiency_reason` + `retry_count`
-- **출력**: 새 `rewritten_queries` + 새 `semantic_queries` (각 sub-query마다 병렬 LLM 호출)
+- **입력**: 이전 `search_plans` + `sufficiency_reason` + `retry_count`
+- **출력**: 새 `search_plans` (각 plan의 `bm25`/`semantic`만 변형, `sub_query_idx`/`sub_query`/`index`는 보존)
+- **인덱스 언어 정책 보존 (8차)**: 프롬프트에 `{target_index}` 주입 → 변형 후에도 같은 인덱스의 언어 정책 유지 (영어 plan은 영어로 변형, 한국어 plan은 한국어로 변형)
 - **프롬프트 (`QUERY_VARIATE`)**: 5가지 전략 명시 + 합성 동사 금지 원칙
   - **BROADEN**: 너무 구체적인 단어 제거, 일반 개념으로
   - **SYNONYMS**: 동의어/별칭으로 치환
@@ -484,9 +524,18 @@ END
 - **출력**: `final_answer` (스트리밍), `sources=[]`
 - **UI 표시**: 4차에서 `💡 일반 대화로 답변 중...` 진행 메시지 제거. 직전 노드 메시지 후 바로 구분선 → 답변 본문 토큰 스트리밍
 
-### 4.3 State 정의
+### 4.3 State 정의 (8차에서 `search_plans` 도입)
 
 ```python
+class SearchPlan(TypedDict, total=False):
+    """Per-(sub_query, index) 검색 계획 (8차 신규).
+    인덱스별 언어 정책 차이로 한 sub-query를 N개 인덱스에 라우팅하면 N개 plan으로 fan-out."""
+    sub_query_idx: int    # sub_queries[i] 참조
+    sub_query: str        # 원문 sub-query (rewrite 전)
+    index: str            # 라우팅된 인덱스명 (elasticsearch_docs / kafka_docs / confluence_docs)
+    bm25: str             # 인덱스 언어 정책 적용 (ES/Kafka는 영어, confluence는 한국어)
+    semantic: str         # 동일 정책
+
 class RAGState(TypedDict):
     # 입력
     messages: list[Message]                       # 멀티턴 대화 히스토리
@@ -497,10 +546,9 @@ class RAGState(TypedDict):
     intent: Literal["question", "chitchat", "general"]   # 7차: followup 제거 (query_reform이 history-aware로 펼침)
     search_intent: Literal["lookup", "count", "list"]   # 6차: ES 질의 형태
     sub_queries: list[str]
-    rewritten_queries: list[str]                 # BM25용 영어 키워드 (sub-query별)
-    semantic_queries: list[str]                  # semantic용 영어 자연 문장 (sub-query별, 4차 추가)
+    target_indices_per_query: list[list[str]]    # sub-query별 인덱스 목록 (index_route 산출, rewrite 입력)
+    search_plans: list[SearchPlan]               # 8차: (sub-query × routed-index) 평탄화. rewrite 산출, retrieve/variate 입력
     metadata_filters: dict[str, Any]
-    target_indices_per_query: list[list[str]]    # sub-query별 인덱스 목록
 
     # 검색 결과
     candidates: list[Document]
@@ -514,7 +562,7 @@ class RAGState(TypedDict):
     sources: list[dict[str, str]]                # [{url, title}, ...]
 ```
 
-> 리랭커 보류로 `reranked_docs` 필드는 제외.
+> 8차에서 `rewritten_queries` / `semantic_queries` 1차원 배열은 폐기되고 `search_plans`로 통합. 리랭커 보류로 `reranked_docs` 필드는 제외.
 
 ---
 
@@ -819,6 +867,7 @@ ES_USERNAME=<user>
 ES_PASSWORD=<password>
 ES_INDEX_ELASTICSEARCH=elasticsearch_docs
 ES_INDEX_KAFKA=kafka_docs
+ES_INDEX_CONFLUENCE=confluence_docs    # 8차 신규 — 사내 Confluence 위키 (한국어 코퍼스)
 ES_FIELD_TITLE=                        # 비워두면 BM25는 content 단일 필드 (현재 매핑에 title 없음)
 ES_FIELD_CONTENT=content
 ES_FIELD_SEMANTIC=content_embedding    # 실제 매핑의 semantic_text 필드명
@@ -848,27 +897,30 @@ LOG_LEVEL=INFO
 
 ### 11.1 공통 원칙
 - 챗봇 표시 명칭은 **"오토에버 클라우드솔루션팀 챗봇"** (UI / `CHITCHAT` / `GENERAL_CHAT` 프롬프트 모두 동일)
-- 한국어 베이스. 예외:
-  - `QUERY_DECOMPOSE` — Anthropic-style 영문 프롬프트 + 한국어 도메인 예시(예시 #3) 혼합 + JSON 출력 강제
-  - `QUERY_REWRITE` — 영문 프롬프트, **출력도 항상 영어**(`keywords` + `semantic` 두 필드, 4차)
-- LLM 판단 노드(`metadata_extract`, `index_route`, `self_check`, `query_decompose`, `query_rewrite`, `query_analyze`, `query_reform` 등)는 **JSON 출력 강제**
+- **8차 기준 모든 프롬프트의 prose는 영어** — LLM이 영어 instruction을 더 안정적으로 따른다는 사용자 판단. 다만:
+  - 예시(few-shot) 섹션의 입력 쿼리는 **한국어 그대로 유지** (실제 사용자 입력 분포에 맞춤)
+  - 챗봇 출력에 등장하는 한국어 리터럴은 보존 (`"해당 정보를 찾을 수 없습니다."`, `"오토에버 클라우드솔루션팀 챗봇"` 정체성 문구, `"ℹ️ 사내 문서 범위 밖의 질문이라 일반 지식으로 답변드릴게요."` 등)
+  - `GENERATE` / `CHITCHAT` / `GENERAL_CHAT`은 첫 줄에 `Respond in Korean.` 명시
+  - `QUERY_REFORM`은 출력이 한국어 self-contained 문장이므로 "Output in Korean" 명시
+- **인덱스별 언어 정책 (8차)**: `QUERY_REWRITE` / `QUERY_VARIATE`는 `{target_index}` 플레이스홀더를 받아 분기. ES/Kafka 인덱스는 영어 출력, Confluence는 한국어 출력 (기술용어는 영어 유지)
+- LLM 판단 노드(`metadata_extract`, `index_route`, `self_check`, `query_decompose`, `query_rewrite`, `query_analyze`, `query_reform`, `query_variate`, `search_intent` 등)는 **JSON 출력 강제**
 - `generate`(RAG): `검색 결과에 없으면 "해당 정보를 찾을 수 없습니다"로 답변` 명시
 - `CHITCHAT`: 매번 역할 안내 반복 금지. 친근한 1~2문장. 정체성 질문에만 짧은 소개
 - `GENERAL_CHAT`: 첫 줄에 *"ℹ️ 사내 문서 범위 밖의 질문이라 일반 지식으로 답변드릴게요."* 안내 + 본 답변. 출처 섹션 만들지 않음
 
-### 11.3 프롬프트 인벤토리 (현재)
-- `QUERY_ANALYZE` — 3-intent 분류만 (7차: followup 제거, 분류와 재작성 분리). 도메인 단어 절대 규칙 + 비교 질문 처리 유지
+### 11.3 프롬프트 인벤토리 (8차 기준)
+- `QUERY_ANALYZE` — 3-intent 분류만 (7차: followup 제거 / 8차: 도메인 카테고리 3개로 확장 + Internal-wiki(Confluence) 키워드 17종 추가). 도메인 단어 절대 규칙 + 비교 질문 처리 유지
 - `QUERY_REFORM` — history-aware self-contained 재작성 (7차 신규). 지시어 치환 + 생략 보완. 한국어 유지(번역 X). 4개 예시
 - `SEARCH_INTENT_CLASSIFY` — 검색 형태 분류 lookup/count/list (6차 신규)
-- `QUERY_DECOMPOSE` — 서브쿼리 분해 (영문 + JSON, 한국어 도메인 예시 1개 포함 — `Elasticsearch와 Kafka 특징 비교해줘 → ["Elasticsearch 특징","Kafka 특징"]`)
-- `QUERY_REWRITE` — 서브쿼리 → BM25용 영어 키워드 + semantic용 **영어 명사구** (이중 출력, HyDE 금지, 4차 갱신)
-- `QUERY_VARIATE` — retry 사이클에서 쿼리를 다른 각도로 재작성 (BROADEN/SYNONYMS/DIFFERENT ANGLE/ADD DOMAIN/DECOMPOSE FURTHER 5전략, 6차 신규)
-- `METADATA_EXTRACT` — 필터 추출 (보수적)
-- `INDEX_ROUTE` — 인덱스 라우팅 (per-sub-query)
+- `QUERY_DECOMPOSE` — 서브쿼리 분해 (영문 + JSON, 한국어 도메인 예시 다수)
+- `QUERY_REWRITE` — 서브쿼리 → BM25 + semantic (이중 출력, HyDE 금지). **8차: `{target_index}` 플레이스홀더 + 인덱스별 언어 정책 (ES/Kafka 영어, Confluence 한국어). few-shot 9개 (영어 6개 + Confluence 한국어 3개)**
+- `QUERY_VARIATE` — retry 사이클에서 쿼리를 다른 각도로 재작성 (BROADEN/SYNONYMS/DIFFERENT ANGLE/ADD DOMAIN/DECOMPOSE FURTHER 5전략, 6차 신규). **8차: `{target_index}` 플레이스홀더 + 변형 후에도 같은 인덱스 언어 정책 유지**
+- `METADATA_EXTRACT` — 필터 추출 (보수적). 8차: `source` 예시를 `["elasticsearch","kafka","confluence"]`로 갱신
+- `INDEX_ROUTE` — 인덱스 라우팅 (per-sub-query). **8차: `"confluence"` 옵션 추가, 사내 운영 맥락 + 공개 기술 토픽 동시 등장 시 양쪽 인덱스 라우팅 가이드 명시**
 - `SELF_CHECK` — 충분성 판단
-- `GENERATE` — RAG-grounded 답변 (6차: `**출처**` 섹션 LLM 작성 금지)
-- `CHITCHAT` — 인사·정체성 응답
-- `GENERAL_CHAT` — 도메인 외 일반 답변 (3차 신규, 6차에서 진입 경로 축소)
+- `GENERATE` — RAG-grounded 답변 (6차: `**출처**` 섹션 LLM 작성 금지). 8차: 본문 영어화, 한국어 응답 명시
+- `CHITCHAT` — 인사·정체성 응답. 8차: 정체성 문구 `"Elasticsearch / Kafka 공식문서 + Confluence 사내 위키"`로 갱신
+- `GENERAL_CHAT` — 도메인 외 일반 답변 (3차 신규, 6차에서 진입 경로 축소). 8차: 도메인 범위 안내에 Confluence 추가
 
 ### 11.2 Generate 프롬프트 핵심 지침
 ```
