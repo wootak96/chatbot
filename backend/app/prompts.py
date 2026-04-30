@@ -141,12 +141,31 @@ The user may ask the LLM to **compare / contrast / diff / summarize / translate 
 - NEVER produce a sub-query like "differences between X and Y" or "comparison of X and Y" — those are LLM tasks, not retrieval tasks.
 - If only ONE topic remains after stripping, return a single sub-query about that topic.
 
-CRITICAL — cross-reference patterns ("use A to inform/judge B") are TWO topics, not one:
-When the user phrases the question as "X 참고해서 Y 알려줘", "X 보고 Y 판단해줘", "X 기반으로 Y", "X 토대로 Y", "X에 따르면 Y", "X 감안해서 Y", "based on X, Y" — they are asking the LLM to retrieve docs about TWO DIFFERENT topics (X = the reference/source side, Y = the actual question side) and synthesize Y at answer-generation time using evidence from X.
-- Korean trigger phrases: 참고해서, 참고하여, 참고 후, 보고서, 보고, 근거로, 기반으로, 토대로, 따라, 따르면, 감안해서, 감안하여
-- English trigger phrases: based on, given, referring to, in light of, according to
-- Decompose into ONE sub-query for X and ONE sub-query for Y — they will route to different indices and retrieve in parallel.
-- Especially watch for the "공식 자료 + 사내 자료" cross-reference: "ES 공식 X 가이드 보고 사내 환경에서 Y 가능한지" → the X side must hit `elasticsearch_docs`/`kafka_docs` while the Y side hits `confluence_docs`. The LLM at answer time then judges feasibility by combining both.
+CRITICAL — cross-reference / "use A to inform/constrain B" patterns are TWO topics, not one:
+When the user's request involves a PUBLIC technical fact AND an INTERNAL/CONSTRAINING context, it is **two retrieval targets**: one for the public side (Elasticsearch/Kafka official docs), one for the internal side (Confluence 사내 위키). Decompose into ONE sub-query per side. The LLM at answer time will combine the two.
+
+Trigger phrases / patterns (Korean):
+- "X 참고해서 Y", "X 참고하여 Y", "X 참고 후 Y"
+- "X 보고 Y", "X 보고서 Y", "X 근거로 Y"
+- "X 기반으로 Y", "X 토대로 Y", "X에 따라 Y", "X에 따르면 Y"
+- "X 감안해서 Y", "X 감안하여 Y"
+- **"X에 맞게 Y", "X에 맞춰 Y", "X에 부합하게 Y"** (constraint phrasing)
+- **"X 준수해서 Y", "X 준수하여 Y", "X에 따라서 Y"** (compliance phrasing)
+- "X 따라가는 Y", "X대로 Y"
+
+Trigger phrases (English):
+- "based on X, Y", "given X, Y", "referring to X, Y"
+- "in line with X, Y", "in compliance with X, Y", "according to X, Y"
+
+Implicit (no explicit linker — public+internal both mentioned):
+- "공식 X에서 / 최신 X" + "회사 표준 / 사내 / 우리 환경 / 내부 규정 / 사내 정책 / 팀 가이드"
+- "공식 가이드" + "사내 표준"
+- "정식 버전 / 최신 버전" + "회사 / 사내"
+
+Decomposition rule:
+- ONE sub-query for the public/external topic → routes to `elasticsearch_docs` / `kafka_docs`.
+- ONE sub-query for the internal/constraining topic → routes to `confluence_docs`.
+- Even when the query reads as a single output request ("스크립트 작성해줘", "절차 알려줘"), the EVIDENCE NEEDED comes from both sides — decompose accordingly.
 
 예시
 1. Query: Did Microsoft or Google make more money last year?
@@ -169,7 +188,12 @@ When the user phrases the question as "X 참고해서 Y 알려줘", "X 보고 Y 
    (Note: "보고 ... 판단해줘" → cross-reference pattern. X = Kafka KIP 공식, Y = 사내 토픽 설계.)
 9. Query: 9.x 마이그레이션 가이드 기반으로 우리 인덱스 호환성 검토해줘
    Decomposed Questions: [Question(question='Elasticsearch 9.x 마이그레이션 가이드 호환성 항목', answer=None), Question(question='사내 Elasticsearch 인덱스 매핑 및 운영 설정', answer=None)]
-10. Query: {query}
+10. Query: Elasticsearch 가장 최신 버전 설치하려고 하는데, 회사 표준에 맞게 최신버전 설치 스크립트 작성해줘
+    Decomposed Questions: [Question(question='Elasticsearch 최신 버전 설치 가이드 및 시스템 요구사항', answer=None), Question(question='사내 Elasticsearch 설치 표준 및 회사 표준 환경 설정', answer=None)]
+    (Note: 명시적 "참고해서" 같은 linker 없이도 "최신 버전" + "회사 표준" 동시 등장 → public + internal 두 토픽. X side = ES 공식 설치 자료, Y side = 사내 표준. LLM이 두 자료를 조합해 스크립트를 합성.)
+11. Query: Kafka 공식 가이드대로 사내 보안 정책에 맞춰 SSL 설정해줘
+    Decomposed Questions: [Question(question='Kafka SSL TLS 설정 공식 가이드', answer=None), Question(question='사내 Kafka 보안 정책 및 인증서 표준', answer=None)]
+12. Query: {query}
     Decomposed Questions:
 
 Respond ONLY with a JSON object in this exact shape (no other text, no Python literals):
@@ -301,14 +325,40 @@ Respond ONLY with JSON:
 SEARCH_INTENT_CLASSIFY = """Classify what kind of Elasticsearch query shape the user's question requires for searching internal documents.
 
 Candidate labels:
-- "lookup": A general question that needs to find document content to answer. (e.g., "RRF가 뭐야?", "consumer group 동작 원리?", "kNN 성능 튜닝 방법", "SSL 설정")
-- "count": A question that only asks for a document count / number of items. (e.g., "ES 문서 몇 개야?", "Kafka 자료 몇 건?", "총 몇 개?", "문서가 얼마나 있어?")
+- "lookup": A general question that needs to find document content to answer. (e.g., "RRF가 뭐야?", "consumer group 동작 원리?", "kNN 성능 튜닝 방법", "SSL 설정", "ES 몇 버전 깔려있어?", "사내 클러스터 몇 버전이야?")
+- "count": A question that asks ONLY for the **number of documents** in the corpus. **The user wants a cardinality of THE INDEX, not a fact about a topic.** (e.g., "ES 문서 몇 개야?", "Kafka 자료 몇 건?", "총 몇 개?", "문서가 얼마나 있어?", "사내 자료 몇 건 있어?")
 - "list": A question that asks which documents exist — titles or a list. (e.g., "어떤 문서들이 있어?", "Kafka 문서 목록 보여줘", "전체 문서 리스트", "title 알려줘")
 
-Decision guide:
-- "몇 개", "몇 건", "갯수", "개수", "총", "얼마나" → almost always count.
-- "목록", "리스트", "어떤 문서들", "title" → almost always list.
-- All other domain content questions are lookup.
+Decision guide — CRITICAL disambiguation of "몇" / "얼마":
+The Korean word "몇" has TWO different meanings depending on what follows it. Do NOT classify as count just because "몇" appears.
+
+  COUNT (cardinality of documents in the index):
+  - "몇 + (개|건|명|건수|개수|가지|편|종류)" — counting items
+  - "총 + (몇|숫자)" — total count
+  - "얼마나 + (있|되|많|적)" — how much/many
+  - "갯수", "개수", "건수", "수량"
+  - The **subject is the document collection itself** ("문서", "자료", "건수", "개수", "목록 크기")
+
+  LOOKUP (specific value lookup, NOT count):
+  - "몇 + (버전|시|번|월|일|살|년|회|등|위|점)" — asking for a specific value (version number, time, ordinal, etc.)
+  - "몇 + 버전" / "몇 v" / "X.x 버전" / "버전 몇" — version number is a fact, not a count
+  - "몇 시", "몇 분" — time of day
+  - "몇 번째", "몇 회" — ordinal position
+  - "얼마" alone (without "있/되") used in "얼마야?" — asking for a value
+  - The **subject is a property/attribute of a topic** ("ES 버전", "포트 번호", "RTT", "샤드 수치"), and the answer comes from document CONTENT, not from counting documents.
+
+  LIST: "목록", "리스트", "어떤 문서들", "title" → almost always list.
+
+  All other domain content questions are lookup.
+
+Examples:
+- "ES 문서 몇 개야?" → count (cardinality of corpus)
+- "ES 몇 버전 쓰고 있어?" → lookup (version number from content)
+- "사내 클러스터 몇 버전이야?" → lookup
+- "사내 자료 얼마나 있어?" → count
+- "Kafka 브로커 몇 대 운영 중이야?" → lookup (운영 대수는 content에 있는 사실, 인덱스 cardinality 아님)
+- "Kafka 관련 문서가 총 몇 건이야?" → count
+- "RRF가 ES 몇 버전부터 지원돼?" → lookup
 
 Respond ONLY with JSON:
 {{"search_intent": "lookup|count|list"}}
