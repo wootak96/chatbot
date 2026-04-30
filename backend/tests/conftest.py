@@ -85,10 +85,13 @@ def stub_generator(monkeypatch):
     def _install(responses: list[str]) -> StubLLM:
         from app.services import llm_factory
         from app.graph.nodes import generate as generate_node
+        from app.graph.nodes import general_chat as general_chat_node
+        from app.graph.nodes import debug_explain as debug_explain_node
 
         stub = StubLLM(responses)
         monkeypatch.setattr(llm_factory, "get_generator_llm", lambda: stub)
-        monkeypatch.setattr(generate_node, "get_generator_llm", lambda s=stub: s, raising=True)
+        for mod in (generate_node, general_chat_node, debug_explain_node):
+            monkeypatch.setattr(mod, "get_generator_llm", lambda s=stub: s, raising=True)
         return stub
 
     return _install

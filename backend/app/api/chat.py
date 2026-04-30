@@ -9,6 +9,7 @@ Drives the LangGraph workflow and emits:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Header
@@ -20,6 +21,9 @@ from app.graph.nodes import PROGRESS_KEY
 from app.graph.state import initial_state
 from app.graph.workflow import get_workflow
 from app.services.llm_factory import set_api_key
+from app.services.log_store import save_turn
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,19 +47,28 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = True
     temperature: float | None = None
+    # Logged-in user id from the frontend URL param. Empty / absent means
+    # "no log persistence and debug-mode questions cannot fetch context".
+    user_id: str | None = None
 
 
 async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     completion_id = sse.make_completion_id()
     yield sse.role_chunk(model=request.model, completion_id=completion_id)
 
-    state = initial_state([m.model_dump() for m in request.messages])
+    user_id = (request.user_id or "").strip()
+    state = initial_state([m.model_dump() for m in request.messages], user_id=user_id)
     workflow = get_workflow()
 
     final_state: dict[str, Any] = dict(state)
     answer_emitted = False
     pending_buf = ""           # holds last few chars to detect SOURCE_MARKER
     sources_truncated = False  # once True, drop the rest of the LLM stream
+
+    # Accumulators for log persistence — captured during the stream and
+    # flushed to `{user_id}_logs` after the response is fully streamed out.
+    progress_log_lines: list[str] = []
+    streamed_answer_buf: list[str] = []
 
     async for event in workflow.astream_events(state, version="v2"):
         kind = event.get("event")
@@ -66,6 +79,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
             if isinstance(output, dict):
                 msg = output.get(PROGRESS_KEY)
                 if msg:
+                    progress_log_lines.append(msg)
                     yield sse.text_chunk(
                         msg + "\n", model=request.model, completion_id=completion_id
                     )
@@ -75,7 +89,11 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                         continue
                     final_state[k] = v
 
-        elif kind == "on_chat_model_stream" and node_name in ("generate", "general_chat"):
+        elif kind == "on_chat_model_stream" and node_name in (
+            "generate",
+            "general_chat",
+            "debug_explain",
+        ):
             if sources_truncated:
                 continue
             chunk = event.get("data", {}).get("chunk")
@@ -89,14 +107,15 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                 answer_emitted = True
 
             # Only the grounded `generate` node has a server-side **출처**
-            # block to deduplicate against. general_chat has no sources, so
-            # we let its tokens through unchanged.
+            # block to deduplicate against. general_chat / debug_explain have
+            # no sources, so we let their tokens through unchanged.
             if node_name == "generate":
                 pending_buf += content
                 idx = pending_buf.find(SOURCE_MARKER)
                 if idx >= 0:
                     safe = pending_buf[:idx].rstrip()
                     if safe:
+                        streamed_answer_buf.append(safe)
                         yield sse.text_chunk(
                             safe, model=request.model, completion_id=completion_id
                         )
@@ -108,10 +127,12 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     flush = pending_buf[: -len(SOURCE_MARKER)]
                     pending_buf = pending_buf[-len(SOURCE_MARKER):]
                     if flush:
+                        streamed_answer_buf.append(flush)
                         yield sse.text_chunk(
                             flush, model=request.model, completion_id=completion_id
                         )
             else:
+                streamed_answer_buf.append(content)
                 yield sse.text_chunk(
                     content, model=request.model, completion_id=completion_id
                 )
@@ -119,6 +140,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     # After the LLM stream ends, flush any held-back tail (only if we didn't
     # already cut at SOURCE_MARKER).
     if not sources_truncated and pending_buf:
+        streamed_answer_buf.append(pending_buf)
         yield sse.text_chunk(
             pending_buf, model=request.model, completion_id=completion_id
         )
@@ -155,6 +177,78 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     yield sse.stop_chunk(model=request.model, completion_id=completion_id)
     yield sse.done_marker()
 
+    # Persist this turn to `{user_id}_logs` so the debug node can replay the
+    # trace later. Skip when:
+    #   - user_id is empty (no auth → no per-user index)
+    #   - intent is `debugging` itself (avoid recursive log noise)
+    # Save errors are best-effort logged inside save_turn — never raise out
+    # to the SSE consumer (the response has already finished by this point
+    # but we want chat to keep working even if ES is unhealthy).
+    intent = final_state.get("intent") or ""
+    if user_id and intent != "debugging":
+        try:
+            await save_turn(user_id, _build_log_doc(request, final_state, progress_log_lines, streamed_answer_buf))
+        except Exception as e:  # belt-and-braces — save_turn already swallows
+            logger.warning("Chat-turn log save failed: %s", e)
+
+
+def _build_log_doc(
+    request: ChatRequest,
+    final_state: dict[str, Any],
+    progress_log_lines: list[str],
+    streamed_answer_buf: list[str],
+) -> dict[str, Any]:
+    """Flatten the final RAGState into the `{user_id}_logs` document shape."""
+    last_user = next(
+        (m for m in reversed(request.messages) if m.role == "user"), None
+    )
+    user_question = last_user.content if last_user else ""
+    final_answer = final_state.get("final_answer") or "".join(streamed_answer_buf)
+    target_indices = sorted(
+        {
+            idx
+            for indices in (final_state.get("target_indices_per_query") or [])
+            for idx in indices
+        }
+    )
+    plans = final_state.get("search_plans") or []
+    candidates = final_state.get("candidates") or []
+    return {
+        "question": user_question,
+        "resolved_query": final_state.get("resolved_query") or "",
+        "intent": final_state.get("intent") or "",
+        "search_intent": final_state.get("search_intent") or "",
+        "sub_queries": final_state.get("sub_queries") or [],
+        "target_indices": target_indices,
+        "search_plans": [
+            {
+                "sub_query": p.get("sub_query", ""),
+                "index": p.get("index", ""),
+                "bm25": p.get("bm25", ""),
+                "semantic": p.get("semantic", ""),
+            }
+            for p in plans
+        ],
+        "candidates": [
+            {
+                "id": d.get("id", ""),
+                "title": d.get("title", ""),
+                "url": d.get("url", ""),
+                "score": float(d.get("score", 0.0) or 0.0),
+            }
+            for d in candidates
+        ],
+        "sufficient": bool(final_state.get("sufficient", False)),
+        "sufficiency_reason": final_state.get("sufficiency_reason") or "",
+        "retry_count": int(final_state.get("retry_count", 0) or 0),
+        "final_answer": final_answer,
+        "sources": [
+            {"url": s.get("url", ""), "title": s.get("title", "")}
+            for s in (final_state.get("sources") or [])
+        ],
+        "progress_log": "\n".join(progress_log_lines),
+    }
+
 
 _NODE_NAMES = {
     "query_analyze",
@@ -171,6 +265,7 @@ _NODE_NAMES = {
     "es_list",
     "generate",
     "general_chat",
+    "debug_explain",
 }
 
 

@@ -71,6 +71,38 @@ async def test_query_analyze_meeting_notes_override_general(stub_judge):
 
 
 @pytest.mark.asyncio
+async def test_query_analyze_debug_pattern_override_question(stub_judge):
+    """Debug pattern overrides even a `question` LLM verdict — meta-questions
+    about prior answers must reach debug_explain, not the search path."""
+    stub_judge(['{"intent": "question"}'])
+    out = await query_analyze(
+        {"current_query": "왜 답변이 이렇게 나왔어?", "messages": []}
+    )
+    assert out["intent"] == "debugging"
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_debug_pattern_overrides_domain_words(stub_judge):
+    """Even when the query contains domain words like 'Kafka', if it's
+    questioning a prior answer it must go to debug, not retrieval."""
+    stub_judge(['{"intent": "question"}'])
+    out = await query_analyze(
+        {"current_query": "왜 Kafka 답변이 이렇게 나왔어?", "messages": []}
+    )
+    assert out["intent"] == "debugging"
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_debug_intent_from_llm_passes_through(stub_judge):
+    """LLM-emitted `debugging` is whitelisted (no longer demoted to question)."""
+    stub_judge(['{"intent": "debugging"}'])
+    out = await query_analyze(
+        {"current_query": "방금 답변 어디서 가져온거야?", "messages": []}
+    )
+    assert out["intent"] == "debugging"
+
+
+@pytest.mark.asyncio
 async def test_query_analyze_no_domain_words_keeps_general(stub_judge):
     """No domain keywords -> the safety net does not interfere with general."""
     stub_judge(['{"intent": "general"}'])
@@ -452,3 +484,93 @@ async def test_generate_chitchat(stub_generator):
     out = await generate({"intent": "chitchat", "resolved_query": "hi"})
     assert "안녕" in out["final_answer"]
     assert out["sources"] == []
+
+
+# ---- debug_explain ----
+
+
+@pytest.mark.asyncio
+async def test_debug_explain_no_user_id_returns_guidance(stub_generator):
+    """Without user_id we cannot fetch per-user logs — guide the user."""
+    stub_generator([])  # not called
+    from app.graph.nodes.debug_explain import debug_explain
+
+    out = await debug_explain(
+        {"intent": "debugging", "current_query": "왜 답변이 이렇게 나왔어?", "user_id": ""}
+    )
+    assert "user_id" in out["final_answer"]
+    assert out["sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_debug_explain_no_logs_returns_no_history_message(
+    monkeypatch, stub_generator
+):
+    """When the user has no stored turns, return a helpful explanation."""
+    stub_generator([])  # not called
+
+    async def empty_fetch(user_id, *, n=3, client=None):
+        return []
+
+    from app.graph.nodes import debug_explain as debug_explain_mod
+
+    monkeypatch.setattr(debug_explain_mod, "fetch_recent_turns", empty_fetch)
+
+    out = await debug_explain_mod.debug_explain(
+        {"intent": "debugging", "current_query": "왜?", "user_id": "alice"}
+    )
+    assert "최근 대화 기록" in out["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_debug_explain_uses_recent_turns_in_prompt(
+    monkeypatch, stub_generator
+):
+    """The 3 most recent turns are rendered into the prompt and the LLM's
+    response is returned as the final answer."""
+    canned_turns = [
+        {
+            "question": "Kafka 토픽 파티션 동작?",
+            "intent": "question",
+            "search_intent": "lookup",
+            "sub_queries": ["Kafka 토픽 파티션"],
+            "target_indices": ["kafka_docs"],
+            "search_plans": [
+                {
+                    "sub_query": "Kafka 토픽 파티션",
+                    "index": "kafka_docs",
+                    "bm25": "Kafka topic partition",
+                    "semantic": "Kafka topic partitions",
+                }
+            ],
+            "sufficient": True,
+            "sufficiency_reason": "kafka 자료 충분",
+            "final_answer": "토픽은 파티션으로 나뉘어... [1]",
+            "sources": [{"url": "u1", "title": "Kafka Topic"}],
+            "progress_log": "🔍 질문 분석 중... (intent=question)",
+        }
+    ]
+
+    async def fake_fetch(user_id, *, n=3, client=None):
+        assert user_id == "alice"
+        return canned_turns
+
+    from app.graph.nodes import debug_explain as debug_explain_mod
+
+    monkeypatch.setattr(debug_explain_mod, "fetch_recent_turns", fake_fetch)
+
+    stub = stub_generator(["방금 Kafka 토픽 답변 [Turn 1]은 kafka_docs에서 ..."])
+
+    out = await debug_explain_mod.debug_explain(
+        {
+            "intent": "debugging",
+            "current_query": "왜 그렇게 답했어?",
+            "user_id": "alice",
+        }
+    )
+    assert "Turn 1" in out["final_answer"]
+    # The prompt sent to the LLM must contain the rendered trace fields.
+    sent_prompt = stub.calls[0][0].content  # HumanMessage content
+    assert "Kafka 토픽 파티션 동작?" in sent_prompt
+    assert "kafka_docs" in sent_prompt
+    assert "kafka 자료 충분" in sent_prompt

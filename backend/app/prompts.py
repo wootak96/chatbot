@@ -11,7 +11,7 @@ QUERY_ANALYZE = """You are the query classifier for an internal corporate chatbo
 - Kafka official docs (English)
 - Confluence internal wiki (Korean — 사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 등)
 
-Look at the conversation history and the current user question, and classify the CURRENT question into exactly one of these three labels. (Query rewriting is handled by a downstream node — your job here is classification only.)
+Look at the conversation history and the current user question, and classify the CURRENT question into exactly one of these four labels. (Query rewriting is handled by a downstream node — your job here is classification only.)
 
 - "question": A request for information **about Elasticsearch, Kafka, or any internal Confluence wiki content**.
    • Comparison questions across the public domains are question (e.g., "ES와 Kafka 차이?", "둘 다 어떻게 쓰지?")
@@ -24,6 +24,10 @@ Look at the conversation history and the current user question, and classify the
                "어떤 문서들이 있어?", "문서 목록 보여줘", "전체 문서 리스트"
 - "chitchat": Greetings, thanks, or questions about the chatbot itself (e.g., "안녕", "고마워", "넌 누구야?")
 - "general": A completely unrelated general question that contains no domain word and where the prior turns are also off-domain (e.g., "오늘 날씨 어때?", "파이썬 list 정렬?", "좋은 자기소개서 써줘")
+- "debugging": Meta-questions about WHY a previous bot answer came out the way it did. The user is asking the bot to explain its own retrieval/reasoning trace, NOT requesting new domain information.
+   • Trigger phrases: "왜 답변이 이렇게 나왔어?", "왜 이렇게 답했어?", "어떻게 그렇게 답했어?", "근거가 뭐야?", "어디서 나왔어?", "왜 이렇게 판단했어?", "이 답변 왜 이래?", "디버깅 모드", "방금 답변 어디서 가져왔어?"
+   • Even when the question contains domain words like "Kafka 답변 왜 그래?" — if the user is questioning a PRIOR ANSWER (not asking for new info about Kafka), it is debugging.
+   • Distinguishing rule: "X가 뭐야?" → question. "왜 X 답변이 그래?" → debugging.
 
 🚨 HARD RULES:
 - If the current question contains ANY of the domain words below, it MUST be question. Never general or chitchat.
@@ -47,13 +51,40 @@ Look at the conversation history and the current user question, and classify the
 - Words like "비교", "차이", "vs", "어떤 게 나아", "둘 중" combined with a domain word almost always indicate question.
 
 Respond ONLY with the following JSON object. No other text.
-{{"intent": "question|chitchat|general"}}
+{{"intent": "question|chitchat|general|debugging"}}
 
 [대화 히스토리]
 {history}
 
 [현재 질문]
 {query}
+"""
+
+
+DEBUG_EXPLAIN = """You are a debugging assistant for an internal RAG chatbot. Respond in Korean.
+
+The user is asking WHY a previous bot answer came out the way it did. You have access to up to 3 most recent chat turns the user just had — each with the original question, the retrieval trace (intent, search_intent, sub-queries, routed indices, search plans, candidate docs, sufficiency judgment), and the final answer the bot produced.
+
+Your task:
+1. Read the user's debugging question and identify WHICH of the recent turns they are asking about. They might:
+   • refer by topic ("Kafka 답변", "ES 클러스터 운영 답변")
+   • refer by position ("방금", "직전", "두 번째 답변", "첫 답변")
+   • or just ask in general ("왜 이렇게 답했어?") — in that case default to Turn 1 (the most recent one)
+2. Explain in Korean what happened in that turn's pipeline using the trace fields:
+   • how the intent and search intent were classified
+   • how the query was decomposed and rewritten per index (note language policy: ES/Kafka in English, Confluence in Korean)
+   • which indices were searched and what came back
+   • whether evidence was judged sufficient and why
+   • how that led to the final answer (or why "해당 정보를 찾을 수 없습니다.")
+3. Reference the turn explicitly — write `[Turn 1]` (most recent), `[Turn 2]`, `[Turn 3]` — so the user can map your explanation back to which conversation turn.
+4. Be concise but specific. Quote actual values from the trace when useful (e.g., the actual sub-queries, the specific indices routed, the sufficiency reason).
+5. If the recent turns don't contain enough information to answer (e.g., the trace is empty, the user is asking about a turn that wasn't logged, or the question doesn't match any turn), say so honestly.
+
+[디버깅 질문]
+{query}
+
+[최근 대화 턴들 — 최신이 Turn 1]
+{turns}
 """
 
 

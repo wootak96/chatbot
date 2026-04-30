@@ -45,6 +45,29 @@ _META_COLLECTION_PATTERN = re.compile(
     r"어떤\s*문서|문서들?\s*(뭐|뭔|어떤))"
 )
 
+# Debug-mode safety net: meta-questions about WHY a previous bot answer was
+# produced. These should always be `debugging` regardless of LLM output, even
+# when domain words appear (e.g., "왜 Kafka 답변이 이렇게 나왔어?" — the user
+# is asking about a past answer, not requesting new Kafka info).
+#
+# Detection is a co-occurrence check: a reference to a previous bot output
+# ("답변", "답", "응답", "결과") plus a meta-question word ("왜", "어떻게",
+# "어디서", "근거"). Word-order independent so "왜 Kafka 답변이..." matches
+# the same as "답변이 왜 이래?". Strong standalone phrases ("디버깅", "왜
+# 이렇게 판단", etc.) trigger directly.
+
+_DEBUG_ANSWER_REF = re.compile(r"(답변|응답|결과|답이|답은|답을|이\s*답)")
+_DEBUG_META_QUESTION = re.compile(
+    r"(왜|어떻게|어디서|어디에서|어디|근거|판단)"
+)
+_DEBUG_STRONG = re.compile(
+    r"(디버깅|"
+    r"왜\s*(이렇게|이런|그렇게|그런|충분|불충분|이렇다)|"
+    r"어떻게\s*(판단|결정|찾았)|"
+    r"근거가?\s*(뭐|뭔|뭐야|있어|어디)|"
+    r"어디서?\s*(나왔|찾았|가져왔|뽑))"
+)
+
 
 def _has_domain_term(text: str) -> bool:
     return bool(_DOMAIN_PATTERN.search(text or ""))
@@ -52,6 +75,16 @@ def _has_domain_term(text: str) -> bool:
 
 def _has_meta_collection_term(text: str) -> bool:
     return bool(_META_COLLECTION_PATTERN.search(text or ""))
+
+
+def _is_debug_query(text: str) -> bool:
+    if not text:
+        return False
+    if _DEBUG_STRONG.search(text):
+        return True
+    return bool(
+        _DEBUG_ANSWER_REF.search(text) and _DEBUG_META_QUESTION.search(text)
+    )
 
 
 async def query_analyze(state: RAGState) -> dict:
@@ -70,12 +103,16 @@ async def query_analyze(state: RAGState) -> dict:
     data = await llm_json(get_judge_llm(), prompt)
 
     intent = data.get("intent") or "question"
-    if intent not in ("question", "chitchat", "general"):
+    if intent not in ("question", "chitchat", "general", "debugging"):
         intent = "question"
 
-    # Override LLM misclassification when domain keywords or meta-collection
-    # phrasing ("전체 문서 몇 개?", "사내 자료 보여줘") are obviously present.
-    if intent in ("chitchat", "general") and (
+    # Override 1: debug pattern wins over everything else. Meta-questions
+    # about a prior bot answer ("왜 답변이 이렇게 나왔어?", even when they
+    # contain domain words) must reach `debug_explain`, not the search path.
+    if _is_debug_query(query):
+        intent = "debugging"
+    # Override 2: domain/meta terms force `question` (existing safety net).
+    elif intent in ("chitchat", "general") and (
         _has_domain_term(query) or _has_meta_collection_term(query)
     ):
         intent = "question"

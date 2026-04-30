@@ -2,10 +2,11 @@
 
 Flow:
   START
-   -> query_analyze (intent classifier: question / chitchat / general)
-        chitchat?  -> generate (greeting reply) -> END
-        general?   -> general_chat -> END
-        question?  -> query_reform (history-aware self-contained rewrite)
+   -> query_analyze (intent classifier: question / chitchat / general / debugging)
+        chitchat?   -> generate (greeting reply) -> END
+        general?    -> general_chat -> END
+        debugging?  -> debug_explain (replay {user_id}_logs trace) -> END
+        question?   -> query_reform (history-aware self-contained rewrite)
    -> search_intent (lookup / count / list)
         count?     -> es_count -> END
         list?      -> es_list  -> END
@@ -33,6 +34,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.debug_explain import debug_explain
 from app.graph.nodes.es_count import es_count
 from app.graph.nodes.es_list import es_list
 from app.graph.nodes.general_chat import general_chat
@@ -56,6 +58,8 @@ def _branch_from_analyze(state: RAGState) -> str:
         return "chitchat"
     if intent == "general":
         return "general"
+    if intent == "debugging":
+        return "debugging"
     return "search"
 
 
@@ -85,6 +89,7 @@ def build_workflow():
     builder.add_node("es_list", es_list)
     builder.add_node("generate", generate)
     builder.add_node("general_chat", general_chat)
+    builder.add_node("debug_explain", debug_explain)
 
     builder.add_edge(START, "query_analyze")
     builder.add_conditional_edges(
@@ -93,6 +98,7 @@ def build_workflow():
         {
             "chitchat": "generate",
             "general": "general_chat",
+            "debugging": "debug_explain",
             "search": "query_reform",
         },
     )
@@ -125,6 +131,7 @@ def build_workflow():
     builder.add_edge("query_variate", "hybrid_retrieve")
     builder.add_edge("generate", END)
     builder.add_edge("general_chat", END)
+    builder.add_edge("debug_explain", END)
 
     return builder.compile()
 

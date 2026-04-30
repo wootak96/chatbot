@@ -364,6 +364,59 @@ async def test_workflow_search_intent_count_ambiguous_searches_all(
 
 
 @pytest.mark.asyncio
+async def test_workflow_debugging_path_replays_logs(
+    stub_judge, stub_generator, monkeypatch
+):
+    """`debugging` intent short-circuits the search pipeline and goes straight
+    to debug_explain, which replays recent turns from {user_id}_logs."""
+    stub_judge(['{"intent": "debugging"}'])
+    stub_generator(["[Turn 1] Kafka 답변은 kafka_docs로 라우팅됐고..."])
+
+    canned_turns = [
+        {
+            "question": "Kafka 뭐야?",
+            "intent": "question",
+            "search_intent": "lookup",
+            "sub_queries": ["Kafka"],
+            "target_indices": ["kafka_docs"],
+            "search_plans": [
+                {
+                    "sub_query": "Kafka",
+                    "index": "kafka_docs",
+                    "bm25": "Kafka",
+                    "semantic": "definition of Kafka",
+                }
+            ],
+            "sufficient": True,
+            "sufficiency_reason": "OK",
+            "final_answer": "Kafka는... [1]",
+            "sources": [{"url": "u/k", "title": "Kafka"}],
+            "progress_log": "🔍 질문 분석 중...",
+        }
+    ]
+
+    async def fake_fetch(user_id, *, n=3, client=None):
+        return canned_turns
+
+    from app.graph.nodes import debug_explain as debug_explain_mod
+
+    monkeypatch.setattr(debug_explain_mod, "fetch_recent_turns", fake_fetch)
+
+    workflow = build_workflow()
+    state = initial_state(
+        [{"role": "user", "content": "왜 답변이 이렇게 나왔어?"}],
+        user_id="alice",
+    )
+    final = await workflow.ainvoke(state)
+
+    assert final["intent"] == "debugging"
+    assert "Turn 1" in final["final_answer"]
+    # No retrieval pipeline ran on the debugging branch.
+    assert final.get("candidates", []) == []
+    assert final.get("search_plans", []) == []
+
+
+@pytest.mark.asyncio
 async def test_workflow_search_intent_list_no_title_field(stub_judge, monkeypatch):
     """list search_intent gracefully degrades when title field is unmapped."""
     stub_judge(

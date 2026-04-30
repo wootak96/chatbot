@@ -36,7 +36,7 @@ class SearchPlan(TypedDict, total=False):
     semantic: str  # semantic query (same per-index language policy)
 
 
-Intent = Literal["question", "chitchat", "general"]
+Intent = Literal["question", "chitchat", "general", "debugging"]
 SearchIntent = Literal["lookup", "count", "list"]
 
 
@@ -44,6 +44,10 @@ class RAGState(TypedDict, total=False):
     # Input
     messages: list[Message]
     current_query: str
+    # Logged-in user — required for log persistence and the `debugging` intent
+    # which fetches recent turns from `{user_id}_logs`. Empty when the request
+    # arrived without authentication (chat still works, just no log writes).
+    user_id: str
 
     # Query understanding
     # resolved_query is produced by query_reform on the search branch using
@@ -79,12 +83,13 @@ class RAGState(TypedDict, total=False):
     sources: list[dict[str, str]]
 
 
-def initial_state(messages: list[Message]) -> RAGState:
+def initial_state(messages: list[Message], user_id: str = "") -> RAGState:
     last_user = next((m for m in reversed(messages) if m["role"] == "user"), None)
     current = last_user["content"] if last_user else ""
     return RAGState(
         messages=messages,
         current_query=current,
+        user_id=user_id,
         retry_count=0,
         candidates=[],
         sub_queries=[],

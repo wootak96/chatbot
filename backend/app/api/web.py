@@ -595,6 +595,7 @@ CHAT_HTML = """<!doctype html>
           model: 'rag-chatbot',
           messages: messages,
           stream: true,
+          user_id: userId,
         }),
       });
       if (!resp.ok || !resp.body) {
