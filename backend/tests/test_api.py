@@ -112,9 +112,9 @@ def test_chat_completions_propagates_bearer_to_contextvar(
             '{"intent": "question", "resolved_query": "x"}',
             '{"search_intent": "lookup"}',
             '{"sub_queries": ["x"]}',
+            '{"indices": ["elasticsearch"]}',
             '{"keywords": "x", "semantic": "x"}',
             '{"source": null, "category": null, "date_range": null}',
-            '{"indices": ["elasticsearch"]}',
             '{"sufficient": true, "reason": "ok"}',
         ]
     )
@@ -161,9 +161,9 @@ def test_chat_completions_dummy_key_falls_back_to_env(
             '{"intent": "question", "resolved_query": "x"}',
             '{"search_intent": "lookup"}',
             '{"sub_queries": ["x"]}',
+            '{"indices": ["elasticsearch"]}',
             '{"keywords": "x", "semantic": "x"}',
             '{"source": null, "category": null, "date_range": null}',
-            '{"indices": ["elasticsearch"]}',
             '{"sufficient": true, "reason": "ok"}',
         ]
     )
@@ -195,9 +195,9 @@ def test_chat_completions_streams_sse(stub_judge, stub_generator, stub_es):
             '{"intent": "question", "resolved_query": "ES RRF"}',
             '{"search_intent": "lookup"}',
             '{"sub_queries": ["ES RRF"]}',
+            '{"indices": ["elasticsearch"]}',
             '{"keywords": "Elasticsearch RRF", "semantic": "definition of Elasticsearch RRF"}',
             '{"source": null, "category": null, "date_range": null}',
-            '{"indices": ["elasticsearch"]}',
             '{"sufficient": true, "reason": "ok"}',
         ]
     )

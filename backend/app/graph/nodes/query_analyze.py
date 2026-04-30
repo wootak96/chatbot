@@ -12,13 +12,25 @@ from app.services.llm_factory import get_judge_llm
 # Safety net: if any of these domain tokens appear in the current query, the
 # intent MUST be "question" — never chitchat or general. The LLM occasionally
 # misclassifies comparison questions like "ES와 Kafka 비교해줘" as general;
-# this regex overrides such mistakes.
+# this regex overrides such mistakes. Three groups: public-tech (ES/Kafka),
+# internal-wiki (Confluence ops/wiki vocabulary), and product names.
 _DOMAIN_PATTERN = re.compile(
-    r"(?i)(elasticsearch|엘라스틱서치|엘라스틱|\bes\b|kafka|카프카|"
+    r"(?i)("
+    # Public-tech: Elasticsearch / Kafka
+    r"elasticsearch|엘라스틱서치|엘라스틱|\bes\b|kafka|카프카|"
     r"\brrf\b|\bbm25\b|semantic|시맨틱|\bknn\b|벡터검색|"
     r"consumer|producer|topic|partition|broker|replica|"
     r"\bmapping\b|\bindex\b|인덱스|shard|샤드|"
-    r"analyzer|tokenizer|embedding|임베딩|dense_vector|sparse_vector)"
+    r"analyzer|tokenizer|embedding|임베딩|dense_vector|sparse_vector|"
+    # Internal-wiki: Confluence
+    r"confluence|컨플루언스|\bwiki\b|위키|"
+    r"회의록|미팅록|미팅\s*노트|"
+    r"운영\s*가이드|운영\s*매뉴얼|운영\s*절차|"
+    r"장애\s*대응|장애\s*보고|"
+    r"인수\s*인계|"
+    r"사내\s*(표준|정책|가이드|매뉴얼|절차)|"
+    r"팀\s*위키"
+    r")"
 )
 
 # Meta-collection safety net: questions about the chatbot's document

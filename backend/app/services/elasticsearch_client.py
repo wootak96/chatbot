@@ -1,7 +1,7 @@
 """Elasticsearch hybrid retrieval (BM25 + semantic_text via RRF retriever).
 
 Targets ES 8.14+ retriever DSL. Search is performed against one or more indices
-selected by the index_route node (elasticsearch_docs / kafka_docs).
+selected by the index_route node (elasticsearch_docs / kafka_docs / confluence_docs).
 """
 
 from __future__ import annotations

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     es_index_elasticsearch: str = "elasticsearch_docs"
     es_index_kafka: str = "kafka_docs"
+    es_index_confluence: str = "confluence_docs"
 
     es_field_title: str = "title"
     es_field_content: str = "content"
@@ -72,13 +73,18 @@ class Settings(BaseSettings):
 
     @property
     def all_indices(self) -> list[str]:
-        return [self.es_index_elasticsearch, self.es_index_kafka]
+        return [
+            self.es_index_elasticsearch,
+            self.es_index_kafka,
+            self.es_index_confluence,
+        ]
 
     @property
     def index_alias_map(self) -> dict[str, str]:
         return {
             "elasticsearch": self.es_index_elasticsearch,
             "kafka": self.es_index_kafka,
+            "confluence": self.es_index_confluence,
         }
 
 

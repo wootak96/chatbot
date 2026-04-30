@@ -51,6 +51,26 @@ async def test_query_analyze_domain_words_override_general(stub_judge):
 
 
 @pytest.mark.asyncio
+async def test_query_analyze_confluence_keywords_override_general(stub_judge):
+    """Internal-wiki vocabulary triggers the safety net even with no ES/Kafka
+    keywords — confluence-only questions must reach the search pipeline."""
+    stub_judge(['{"intent": "general"}'])
+    out = await query_analyze(
+        {"current_query": "운영 가이드 어디 있어?", "messages": []}
+    )
+    assert out["intent"] == "question"
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_meeting_notes_override_general(stub_judge):
+    stub_judge(['{"intent": "general"}'])
+    out = await query_analyze(
+        {"current_query": "어제 회의록 좀 보여줘", "messages": []}
+    )
+    assert out["intent"] == "question"
+
+
+@pytest.mark.asyncio
 async def test_query_analyze_no_domain_words_keeps_general(stub_judge):
     """No domain keywords -> the safety net does not interfere with general."""
     stub_judge(['{"intent": "general"}'])
@@ -132,15 +152,46 @@ async def test_query_rewrite_parallel(stub_judge):
             '{"keywords": "Kafka consumer group", "semantic": "definition of Kafka consumer group"}',
         ]
     )
-    state = {"sub_queries": ["RRF 어떻게?", "kafka cg"]}
+    state = {
+        "sub_queries": ["RRF 어떻게?", "kafka cg"],
+        "target_indices_per_query": [["elasticsearch_docs"], ["kafka_docs"]],
+    }
     out = await query_rewrite(state)
-    assert len(out["rewritten_queries"]) == 2
-    assert len(out["semantic_queries"]) == 2
-    # BM25 list = keywords-only English
-    assert "Elasticsearch" in out["rewritten_queries"][0]
-    assert "RRF" in out["rewritten_queries"][0]
-    # Semantic list = full English natural form
-    assert "Reciprocal Rank Fusion" in out["semantic_queries"][0]
+    plans = out["search_plans"]
+    assert len(plans) == 2
+    assert plans[0]["index"] == "elasticsearch_docs"
+    assert plans[1]["index"] == "kafka_docs"
+    # BM25 = keywords-only English for English-corpus indices
+    assert "Elasticsearch" in plans[0]["bm25"]
+    assert "RRF" in plans[0]["bm25"]
+    # Semantic = full English natural form
+    assert "Reciprocal Rank Fusion" in plans[0]["semantic"]
+
+
+@pytest.mark.asyncio
+async def test_query_rewrite_fans_out_per_routed_index(stub_judge):
+    """A single sub-query routed to two indices yields two plans, one per index."""
+    stub_judge(
+        [
+            '{"keywords": "Elasticsearch cluster operations", "semantic": "Elasticsearch cluster operations guide"}',
+            '{"keywords": "Elasticsearch 클러스터 운영 가이드", "semantic": "Elasticsearch 클러스터 운영 가이드 절차"}',
+        ]
+    )
+    state = {
+        "sub_queries": ["ES 클러스터 운영"],
+        "target_indices_per_query": [["elasticsearch_docs", "confluence_docs"]],
+    }
+    out = await query_rewrite(state)
+    plans = out["search_plans"]
+    assert len(plans) == 2
+    assert {p["index"] for p in plans} == {"elasticsearch_docs", "confluence_docs"}
+    # Both plans share the same sub_query_idx (the single sub-query at index 0)
+    assert {p["sub_query_idx"] for p in plans} == {0}
+    # Confluence plan keeps Korean BM25; ES plan stays English
+    by_idx = {p["index"]: p for p in plans}
+    assert "클러스터" in by_idx["confluence_docs"]["bm25"]
+    assert "Elasticsearch" in by_idx["elasticsearch_docs"]["bm25"]
+    assert "cluster" in by_idx["elasticsearch_docs"]["bm25"].lower()
 
 
 @pytest.mark.asyncio
@@ -163,7 +214,7 @@ async def test_index_route_per_subquery(stub_judge):
     )
     out = await index_route(
         {
-            "rewritten_queries": ["ES RRF 동작", "Kafka consumer group"],
+            "sub_queries": ["ES RRF 동작", "Kafka consumer group"],
             "intent": "question",
         }
     )
@@ -177,7 +228,7 @@ async def test_index_route_per_subquery(stub_judge):
 async def test_index_route_picks_both_for_one_subquery(stub_judge):
     stub_judge(['{"indices": ["elasticsearch", "kafka"]}'])
     out = await index_route(
-        {"rewritten_queries": ["ES와 Kafka 비교"], "intent": "question"}
+        {"sub_queries": ["ES와 Kafka 비교"], "intent": "question"}
     )
     assert len(out["target_indices_per_query"]) == 1
     assert set(out["target_indices_per_query"][0]) == {
@@ -187,31 +238,33 @@ async def test_index_route_picks_both_for_one_subquery(stub_judge):
 
 
 @pytest.mark.asyncio
-async def test_index_route_empty_falls_back_to_both(stub_judge):
+async def test_index_route_empty_falls_back_to_all(stub_judge):
     stub_judge(['{"indices": []}'])
     out = await index_route(
-        {"rewritten_queries": ["모호한 질문"], "intent": "question"}
+        {"sub_queries": ["모호한 질문"], "intent": "question"}
     )
     assert set(out["target_indices_per_query"][0]) == {
         "elasticsearch_docs",
         "kafka_docs",
+        "confluence_docs",
     }
 
 
 @pytest.mark.asyncio
 async def test_index_route_invalid_falls_back(stub_judge):
     stub_judge(['{"indices": ["fake_index"]}'])
-    out = await index_route({"rewritten_queries": ["x"], "intent": "question"})
+    out = await index_route({"sub_queries": ["x"], "intent": "question"})
     assert set(out["target_indices_per_query"][0]) == {
         "elasticsearch_docs",
         "kafka_docs",
+        "confluence_docs",
     }
 
 
 @pytest.mark.asyncio
 async def test_index_route_no_subqueries(stub_judge):
     stub_judge([])  # not called
-    out = await index_route({"rewritten_queries": [], "intent": "question"})
+    out = await index_route({"sub_queries": [], "intent": "question"})
     assert out["target_indices_per_query"] == []
 
 
@@ -228,8 +281,22 @@ async def test_hybrid_retrieve_merges_dedupes(stub_es):
     )
     out = await hybrid_retrieve(
         {
-            "rewritten_queries": ["q1", "q2"],
-            "target_indices_per_query": [["elasticsearch_docs"], ["kafka_docs"]],
+            "search_plans": [
+                {
+                    "sub_query_idx": 0,
+                    "sub_query": "q1",
+                    "index": "elasticsearch_docs",
+                    "bm25": "q1",
+                    "semantic": "q1",
+                },
+                {
+                    "sub_query_idx": 1,
+                    "sub_query": "q2",
+                    "index": "kafka_docs",
+                    "bm25": "q2",
+                    "semantic": "q2",
+                },
+            ],
             "metadata_filters": {},
             "intent": "question",
         }
@@ -239,12 +306,11 @@ async def test_hybrid_retrieve_merges_dedupes(stub_es):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_retrieve_skips_when_no_indices(stub_es):
+async def test_hybrid_retrieve_skips_when_no_plans(stub_es):
     stub_es([[]])
     out = await hybrid_retrieve(
         {
-            "rewritten_queries": ["q"],
-            "target_indices_per_query": [[]],
+            "search_plans": [],
             "intent": "question",
         }
     )
@@ -252,7 +318,7 @@ async def test_hybrid_retrieve_skips_when_no_indices(stub_es):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_retrieve_uses_per_subquery_indices(monkeypatch):
+async def test_hybrid_retrieve_uses_per_plan_index(monkeypatch):
     captured: list[tuple[str, str, list[str]]] = []
 
     async def fake_search(
@@ -274,11 +340,21 @@ async def test_hybrid_retrieve_uses_per_subquery_indices(monkeypatch):
 
     out = await hybrid_retrieve(
         {
-            "rewritten_queries": ["es q", "kafka q"],
-            "semantic_queries": ["es semantic", "kafka semantic"],
-            "target_indices_per_query": [
-                ["elasticsearch_docs"],
-                ["kafka_docs"],
+            "search_plans": [
+                {
+                    "sub_query_idx": 0,
+                    "sub_query": "es q",
+                    "index": "elasticsearch_docs",
+                    "bm25": "es q",
+                    "semantic": "es semantic",
+                },
+                {
+                    "sub_query_idx": 1,
+                    "sub_query": "kafka q",
+                    "index": "kafka_docs",
+                    "bm25": "kafka q",
+                    "semantic": "kafka semantic",
+                },
             ],
             "metadata_filters": {},
             "intent": "question",

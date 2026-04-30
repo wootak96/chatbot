@@ -20,6 +20,22 @@ class Document(TypedDict, total=False):
     updated_at: str
 
 
+class SearchPlan(TypedDict, total=False):
+    """Per-(sub_query, index) retrieval plan with index-aware rewrites.
+
+    Different indices may use different languages — confluence_docs is a
+    Korean corpus while elasticsearch_docs / kafka_docs are English. So the
+    rewrite step fans out one plan per (sub_query, routed-index) pair, and
+    BM25 / semantic strings follow each index's language policy.
+    """
+
+    sub_query_idx: int  # 0-based index into sub_queries
+    sub_query: str  # original sub-query text (pre-rewrite)
+    index: str  # target index name (e.g., "confluence_docs")
+    bm25: str  # BM25 query (Korean for confluence, English for ES/Kafka)
+    semantic: str  # semantic query (same per-index language policy)
+
+
 Intent = Literal["question", "chitchat", "general"]
 SearchIntent = Literal["lookup", "count", "list"]
 
@@ -41,15 +57,14 @@ class RAGState(TypedDict, total=False):
     # search branch (question); irrelevant for chitchat/general.
     search_intent: SearchIntent
     sub_queries: list[str]
-    # rewritten_queries[i] = English BM25 keywords for sub_queries[i].
-    # semantic_queries[i]  = full English natural-language form for the
-    # semantic_text retriever. Same length as rewritten_queries.
-    rewritten_queries: list[str]
-    semantic_queries: list[str]
-    metadata_filters: dict[str, Any]
     # Per-sub-query routing: target_indices_per_query[i] is the list of ES
-    # indices to search for sub_queries[i]. Length matches rewritten_queries.
+    # indices to search for sub_queries[i]. Produced by index_route, which
+    # now runs BEFORE query_rewrite so rewrites can be index-aware.
     target_indices_per_query: list[list[str]]
+    # Flattened (sub_query, index) plans with per-index rewrite. One entry
+    # per (sub_query_idx, target_index) pair.
+    search_plans: list[SearchPlan]
+    metadata_filters: dict[str, Any]
 
     # Retrieval
     candidates: list[Document]
@@ -73,10 +88,9 @@ def initial_state(messages: list[Message]) -> RAGState:
         retry_count=0,
         candidates=[],
         sub_queries=[],
-        rewritten_queries=[],
-        semantic_queries=[],
-        metadata_filters={},
         target_indices_per_query=[],
+        search_plans=[],
+        metadata_filters={},
         sources=[],
         final_answer="",
         sufficient=False,

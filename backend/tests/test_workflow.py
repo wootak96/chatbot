@@ -16,12 +16,12 @@ async def test_workflow_full_question_path(stub_judge, stub_generator, stub_es):
             '{"search_intent": "lookup"}',
             # query_decompose
             '{"sub_queries": ["Elasticsearch RRF 동작 원리"]}',
-            # query_rewrite (1)
+            # index_route (1 sub-query)
+            '{"indices": ["elasticsearch"]}',
+            # query_rewrite (1 plan: 1 sub × 1 routed index)
             '{"keywords": "Elasticsearch reciprocal rank fusion", "semantic": "mechanism of Reciprocal Rank Fusion in Elasticsearch"}',
             # metadata_extract
             '{"source": null, "category": null, "date_range": null}',
-            # index_route
-            '{"indices": ["elasticsearch"]}',
             # self_check
             '{"sufficient": true, "reason": "OK"}',
         ]
@@ -65,11 +65,13 @@ async def test_workflow_retry_on_insufficient(stub_judge, stub_generator, stub_e
             '{"intent": "question", "resolved_query": "k"}',
             '{"search_intent": "lookup"}',
             '{"sub_queries": ["k"]}',
+            # index_route (now before rewrite)
+            '{"indices": ["kafka"]}',
+            # query_rewrite (1 plan)
             '{"keywords": "Kafka consumer group", "semantic": "definition of Kafka consumer group"}',
             '{"source": null, "category": null, "date_range": null}',
-            '{"indices": ["kafka"]}',
             # first self_check short-circuits on empty candidates (no LLM call),
-            # so retry path: query_variate (1 LLM call per sub-query)
+            # so retry path: query_variate (1 LLM call per plan)
             '{"keywords": "Kafka consumer group rebalance", "semantic": "how Kafka consumer groups rebalance partitions"}',
             # second self_check after retry sees real candidates
             '{"sufficient": true, "reason": "now ok"}',
@@ -99,9 +101,9 @@ async def test_workflow_routes_to_kafka(stub_judge, stub_generator, stub_es):
             '{"intent": "question", "resolved_query": "Kafka 토픽 파티션"}',
             '{"search_intent": "lookup"}',
             '{"sub_queries": ["Kafka 토픽 파티션"]}',
+            '{"indices": ["kafka"]}',
             '{"keywords": "Kafka topic partition", "semantic": "concept of Kafka topic partitions"}',
             '{"source": null, "category": null, "date_range": null}',
-            '{"indices": ["kafka"]}',
             '{"sufficient": true, "reason": "ok"}',
         ]
     )
@@ -139,14 +141,14 @@ async def test_workflow_routes_per_subquery(stub_judge, stub_generator):
             '{"search_intent": "lookup"}',
             # query_decompose -> 2 sub-queries
             '{"sub_queries": ["Elasticsearch RRF", "Kafka consumer group"]}',
-            # query_rewrite x2
+            # index_route x2 (one per sub-query, now before rewrite)
+            '{"indices": ["elasticsearch"]}',
+            '{"indices": ["kafka"]}',
+            # query_rewrite x2 (one per plan: each sub × 1 routed index)
             '{"keywords": "Elasticsearch RRF", "semantic": "how Elasticsearch RRF works"}',
             '{"keywords": "Kafka consumer group", "semantic": "definition of Kafka consumer group"}',
             # metadata_extract (single)
             '{"source": null, "category": null, "date_range": null}',
-            # index_route x2
-            '{"indices": ["elasticsearch"]}',
-            '{"indices": ["kafka"]}',
             # self_check
             '{"sufficient": true, "reason": "ok"}',
         ]
@@ -188,6 +190,67 @@ async def test_workflow_routes_per_subquery(stub_judge, stub_generator):
         ["kafka_docs"],
     ]
     assert len(final["sources"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_workflow_fans_out_per_routed_index(stub_judge, stub_generator):
+    """Single sub-query routed to confluence + elasticsearch fans out into
+    two index-specific search plans with different language policies."""
+    stub_judge(
+        [
+            '{"intent": "question", "resolved_query": "ES 클러스터 운영"}',
+            '{"search_intent": "lookup"}',
+            '{"sub_queries": ["ES 클러스터 운영"]}',
+            # index_route routes the single sub-query to BOTH es_docs and confluence
+            '{"indices": ["elasticsearch", "confluence"]}',
+            # query_rewrite is now called twice — one per (sub, idx) plan.
+            # English rewrite for elasticsearch_docs:
+            '{"keywords": "Elasticsearch cluster operations", "semantic": "Elasticsearch cluster operations guide"}',
+            # Korean rewrite for confluence_docs (technical term stays English):
+            '{"keywords": "Elasticsearch 클러스터 운영 가이드", "semantic": "Elasticsearch 클러스터 운영 절차"}',
+            '{"source": null, "category": null, "date_range": null}',
+            '{"sufficient": true, "reason": "ok"}',
+        ]
+    )
+    stub_generator(["답변 [1]."])
+
+    captured: list[tuple[str, list[str]]] = []
+
+    async def fake_search(
+        *, bm25_query_text, indices, semantic_query_text=None, metadata_filters=None, **kw
+    ):
+        captured.append((bm25_query_text, list(indices)))
+        return [
+            {
+                "id": bm25_query_text,
+                "title": bm25_query_text,
+                "url": "u/" + bm25_query_text,
+                "content": "c",
+            }
+        ]
+
+    from app.graph.nodes import hybrid_retrieve as hr_mod
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(hr_mod, "hybrid_search", fake_search)
+    try:
+        workflow = build_workflow()
+        state = initial_state(
+            [{"role": "user", "content": "ES 클러스터 운영 어떻게 해?"}]
+        )
+        final = await workflow.ainvoke(state)
+    finally:
+        monkey.undo()
+
+    # Two parallel ES calls, one per routed index, with index-specific BM25.
+    by_index = {indices[0]: bm25 for bm25, indices in captured}
+    assert "Elasticsearch cluster operations" == by_index["elasticsearch_docs"]
+    assert "클러스터" in by_index["confluence_docs"]
+    # search_plans should reflect the fan-out
+    plans = final["search_plans"]
+    assert len(plans) == 2
+    assert {p["index"] for p in plans} == {"elasticsearch_docs", "confluence_docs"}
+    assert all(p["sub_query_idx"] == 0 for p in plans)
 
 
 @pytest.mark.asyncio
@@ -259,11 +322,11 @@ async def test_workflow_search_intent_count_kafka(stub_judge, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_workflow_search_intent_count_ambiguous_searches_both(
+async def test_workflow_search_intent_count_ambiguous_searches_all(
     stub_judge, monkeypatch
 ):
-    """Meta-collection question (no domain keyword) short-circuits to both
-    indices without an LLM routing call.
+    """Meta-collection question (no domain keyword) short-circuits to all
+    configured indices without an LLM routing call.
     """
     # No third stub entry — route_query short-circuits when no domain term
     # is present in the query, so the routing LLM call is skipped entirely.
@@ -278,7 +341,11 @@ async def test_workflow_search_intent_count_ambiguous_searches_both(
 
     async def fake_count(*, indices, metadata_filters=None, client=None):
         captured["indices"] = list(indices)
-        return {"elasticsearch_docs": 50, "kafka_docs": 30}
+        return {
+            "elasticsearch_docs": 50,
+            "kafka_docs": 30,
+            "confluence_docs": 20,
+        }
 
     from app.graph.nodes import es_count as es_count_mod
 
@@ -288,8 +355,12 @@ async def test_workflow_search_intent_count_ambiguous_searches_both(
     state = initial_state([{"role": "user", "content": "전체 문서 몇 개?"}])
     final = await workflow.ainvoke(state)
 
-    assert set(captured["indices"]) == {"elasticsearch_docs", "kafka_docs"}
-    assert "80" in final["final_answer"]
+    assert set(captured["indices"]) == {
+        "elasticsearch_docs",
+        "kafka_docs",
+        "confluence_docs",
+    }
+    assert "100" in final["final_answer"]
 
 
 @pytest.mark.asyncio

@@ -10,16 +10,19 @@ Flow:
         count?     -> es_count -> END
         list?      -> es_list  -> END
         lookup?    -> query_decompose
-   -> query_decompose -> query_rewrite -> metadata_extract -> index_route
+   -> query_decompose -> index_route -> query_rewrite -> metadata_extract
    -> hybrid_retrieve
    -> self_check
         sufficient            -> generate (RAG-grounded) -> END
         retry < max           -> query_variate -> hybrid_retrieve (cycle)
         retry >= max          -> generate ("해당 정보를 찾을 수 없습니다") -> END
 
-The rewrite/metadata/route segment is sequenced (not parallel) so each step's
-progress message can stream cleanly to the SSE client without state-merge
-collisions.
+Routing now runs BEFORE rewrite so rewrites can be index-aware: the
+confluence_docs corpus is Korean while elasticsearch_docs / kafka_docs are
+English, and a single sub-query routed to multiple indices needs different
+BM25/semantic strings per index. `query_rewrite` fans out one plan per
+(sub_query, routed-index) pair into `search_plans`, which `hybrid_retrieve`
+then executes in parallel.
 
 History-aware query reformulation is isolated in `query_reform` (single
 responsibility) so downstream nodes only see a self-contained query and never
@@ -72,9 +75,9 @@ def build_workflow():
     builder.add_node("query_reform", query_reform)
     builder.add_node("search_intent", search_intent)
     builder.add_node("query_decompose", query_decompose)
+    builder.add_node("index_route", index_route)
     builder.add_node("query_rewrite", query_rewrite)
     builder.add_node("metadata_extract", metadata_extract)
-    builder.add_node("index_route", index_route)
     builder.add_node("hybrid_retrieve", hybrid_retrieve)
     builder.add_node("self_check", self_check)
     builder.add_node("query_variate", query_variate)
@@ -105,10 +108,10 @@ def build_workflow():
     )
     builder.add_edge("es_count", END)
     builder.add_edge("es_list", END)
-    builder.add_edge("query_decompose", "query_rewrite")
+    builder.add_edge("query_decompose", "index_route")
+    builder.add_edge("index_route", "query_rewrite")
     builder.add_edge("query_rewrite", "metadata_extract")
-    builder.add_edge("metadata_extract", "index_route")
-    builder.add_edge("index_route", "hybrid_retrieve")
+    builder.add_edge("metadata_extract", "hybrid_retrieve")
     builder.add_edge("hybrid_retrieve", "self_check")
     builder.add_conditional_edges(
         "self_check",

@@ -1,11 +1,14 @@
 """Per-sub-query index routing.
 
-For each sub-query (or its rewritten form when available), the LLM picks
-which of the configured indices (`elasticsearch_docs`, `kafka_docs`) to
-search. This lets a decomposed query like
-   "ES와 Kafka의 차이"  →  ["ES throughput", "Kafka throughput"]
-route to {ES} and {Kafka} respectively rather than searching both indices
-for both sub-queries.
+Runs BEFORE query_rewrite so rewrites can be index-aware: each sub-query is
+routed to one or more indices, and a single sub-query routed to multiple
+indices will produce multiple per-index search plans downstream (the
+confluence_docs corpus is Korean, ES/Kafka docs are English, so BM25 strings
+differ per index).
+
+For a decomposed query like "ES와 Kafka의 차이"  →  ["ES throughput",
+"Kafka throughput"] each sub-query routes to its own index rather than
+searching both indices for both sub-queries.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ async def _route_one(query: str, alias_map: dict[str, str]) -> list[str]:
         aliases = []
     valid = [a for a in aliases if a in alias_map]
     if not valid:
-        valid = list(alias_map.keys())  # fallback: search both for recall
+        valid = list(alias_map.keys())  # fallback: search all for recall
     return [alias_map[a] for a in valid]
 
 
@@ -54,9 +57,7 @@ async def index_route(state: RAGState) -> dict:
     if state.get("intent") == "chitchat":
         return {"target_indices_per_query": [], PROGRESS_KEY: ""}
 
-    # Prefer rewritten queries when available (cleaner signal for the LLM);
-    # fall back to sub_queries.
-    queries = state.get("rewritten_queries") or state.get("sub_queries") or []
+    queries = state.get("sub_queries") or []
     if not queries:
         return {
             "target_indices_per_query": [],
