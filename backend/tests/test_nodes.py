@@ -61,6 +61,39 @@ async def test_query_analyze_confluence_keywords_override_general(stub_judge):
     assert out["intent"] == "question"
 
 
+# ---- es_list size extraction ----
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        # Default when no size hint
+        ("어떤 문서들이 있어?", 30),
+        ("문서 목록 보여줘", 30),
+        ("", 30),
+        # Numeric with 개/건 suffix
+        ("10개 보여줘", 10),
+        ("5 건만", 5),
+        ("100개씩 알려줘", 100),
+        # "All" markers bump to max
+        ("전체 문서 다 보여줘", 1000),
+        ("모든 문서 목록", 1000),
+        ("모두 보여줘", 1000),
+        # False-positive guards: bare number must NOT match (no 개/건 suffix)
+        ("최근 30일 자료", 30),  # default — '30일' has no 개/건, falls through
+        ("2024년 문서", 30),
+        # Clamp to MAX
+        ("99999개 보여줘", 1000),
+        # Floor at 1
+        ("0개", 1),
+    ],
+)
+def test_es_list_extract_size(query, expected):
+    from app.graph.nodes.es_list import _extract_size
+
+    assert _extract_size(query) == expected
+
+
 @pytest.mark.asyncio
 async def test_query_analyze_meeting_notes_override_general(stub_judge):
     stub_judge(['{"intent": "general"}'])
