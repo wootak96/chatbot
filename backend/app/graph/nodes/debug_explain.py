@@ -112,8 +112,11 @@ async def debug_explain(state: RAGState) -> dict:
     response = await get_generator_llm().ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
 
+    # Match generate / general_chat: no separate progress line — the answer
+    # streams directly after the separator. The "최근 N턴 분석 완료" message
+    # was redundant once the actual explanation arrives.
     return {
         "final_answer": content,
         "sources": [],
-        PROGRESS_KEY: f"🐛 디버깅 모드: 최근 {len(turns)}턴 분석 완료",
+        PROGRESS_KEY: "",
     }
