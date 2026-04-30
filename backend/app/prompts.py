@@ -141,6 +141,13 @@ The user may ask the LLM to **compare / contrast / diff / summarize / translate 
 - NEVER produce a sub-query like "differences between X and Y" or "comparison of X and Y" — those are LLM tasks, not retrieval tasks.
 - If only ONE topic remains after stripping, return a single sub-query about that topic.
 
+CRITICAL — cross-reference patterns ("use A to inform/judge B") are TWO topics, not one:
+When the user phrases the question as "X 참고해서 Y 알려줘", "X 보고 Y 판단해줘", "X 기반으로 Y", "X 토대로 Y", "X에 따르면 Y", "X 감안해서 Y", "based on X, Y" — they are asking the LLM to retrieve docs about TWO DIFFERENT topics (X = the reference/source side, Y = the actual question side) and synthesize Y at answer-generation time using evidence from X.
+- Korean trigger phrases: 참고해서, 참고하여, 참고 후, 보고서, 보고, 근거로, 기반으로, 토대로, 따라, 따르면, 감안해서, 감안하여
+- English trigger phrases: based on, given, referring to, in light of, according to
+- Decompose into ONE sub-query for X and ONE sub-query for Y — they will route to different indices and retrieve in parallel.
+- Especially watch for the "공식 자료 + 사내 자료" cross-reference: "ES 공식 X 가이드 보고 사내 환경에서 Y 가능한지" → the X side must hit `elasticsearch_docs`/`kafka_docs` while the Y side hits `confluence_docs`. The LLM at answer time then judges feasibility by combining both.
+
 예시
 1. Query: Did Microsoft or Google make more money last year?
    Decomposed Questions: [Question(question='How much profit did Microsoft make last year?', answer=None), Question(question='How much profit did Google make last year?', answer=None)]
@@ -154,8 +161,16 @@ The user may ask the LLM to **compare / contrast / diff / summarize / translate 
    Decomposed Questions: [Question(question='Elasticsearch RRF 동작 방식', answer=None), Question(question='Elasticsearch BM25 동작 방식', answer=None)]
 6. Query: kafka consumer group 동작 방식 요약해줘
    Decomposed Questions: [Question(question='Kafka consumer group 동작 방식', answer=None)]
-7. Query: {query}
-   Decomposed Questions:
+7. Query: 9버전 업그레이드 참고해서 사내 클러스터 업그레이드 가능 여부 알려줘
+   Decomposed Questions: [Question(question='Elasticsearch 9버전 업그레이드 가이드 및 호환성 요구사항', answer=None), Question(question='사내 Elasticsearch 클러스터 운영 환경 및 업그레이드 절차', answer=None)]
+   (Note: "참고해서 ... 가능 여부 알려줘" → cross-reference pattern. X = ES 9 공식 업그레이드 자료, Y = 사내 클러스터 업그레이드 절차. 검색은 둘 다 독립적으로, 가능 여부 판단은 LLM이 답변 단계에서 수행.)
+8. Query: Kafka 공식 KIP 보고 사내 토픽 설계 변경해야 하는지 판단해줘
+   Decomposed Questions: [Question(question='Kafka KIP 토픽 관련 변경사항 및 권장 설계', answer=None), Question(question='사내 Kafka 토픽 설계 및 운영 정책', answer=None)]
+   (Note: "보고 ... 판단해줘" → cross-reference pattern. X = Kafka KIP 공식, Y = 사내 토픽 설계.)
+9. Query: 9.x 마이그레이션 가이드 기반으로 우리 인덱스 호환성 검토해줘
+   Decomposed Questions: [Question(question='Elasticsearch 9.x 마이그레이션 가이드 호환성 항목', answer=None), Question(question='사내 Elasticsearch 인덱스 매핑 및 운영 설정', answer=None)]
+10. Query: {query}
+    Decomposed Questions:
 
 Respond ONLY with a JSON object in this exact shape (no other text, no Python literals):
 {{"sub_queries": ["question 1", "question 2", ...]}}
