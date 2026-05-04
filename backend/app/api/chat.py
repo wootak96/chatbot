@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Header
@@ -213,6 +214,7 @@ def _build_log_doc(
     ]
     plans = final_state.get("search_plans") or []
     candidates = final_state.get("candidates") or []
+    cited_indices = _extract_cited_indices(final_answer)
     return {
         "question": user_question,
         "resolved_query": final_state.get("resolved_query") or "",
@@ -237,8 +239,9 @@ def _build_log_doc(
                 "title": d.get("title", ""),
                 "url": d.get("url", ""),
                 "score": float(d.get("score", 0.0) or 0.0),
+                "used": (i in cited_indices),
             }
-            for d in candidates
+            for i, d in enumerate(candidates, 1)
         ],
         "sufficient": bool(final_state.get("sufficient", False)),
         "sufficiency_reason": final_state.get("sufficiency_reason") or "",
@@ -250,6 +253,21 @@ def _build_log_doc(
         ],
         "progress_log": "\n".join(progress_log_lines),
     }
+
+
+_CITATION_RE = re.compile(r"\[(\d+)\]")
+
+
+def _extract_cited_indices(answer: str) -> set[int]:
+    """Pull 1-based [N] citation numbers out of the generated answer.
+
+    GENERATE prompt instructs the LLM to insert `[N]` inline citations matching
+    the 1-based candidate order, so a doc was "used" iff its index appears
+    bracketed in the answer body. Returns an empty set on chitchat / general /
+    debugging answers (which have no candidates anyway)."""
+    if not answer:
+        return set()
+    return {int(m) for m in _CITATION_RE.findall(answer)}
 
 
 _NODE_NAMES = {

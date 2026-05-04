@@ -46,6 +46,7 @@ def _render_turns(turns: list[dict]) -> str:
         index_routing = t.get("index_routing") or []
         metadata_filters = t.get("metadata_filters") or {}
         plans = t.get("search_plans") or []
+        candidates = t.get("candidates") or []
         sufficient = t.get("sufficient")
         reason = t.get("sufficiency_reason") or ""
         sources = t.get("sources") or []
@@ -76,6 +77,16 @@ def _render_turns(turns: list[dict]) -> str:
                     f"  - [{p.get('index', '')}] sub_query={p.get('sub_query', '')!r} "
                     f"bm25={p.get('bm25', '')!r} semantic={p.get('semantic', '')!r}"
                 )
+        if candidates:
+            used_count = sum(1 for c in candidates if c.get("used"))
+            lines.append(
+                f"candidates ({used_count}/{len(candidates)} 답변 인용):"
+            )
+            for j, c in enumerate(candidates, 1):
+                mark = "✓" if c.get("used") else "·"
+                title = c.get("title", "") or "(제목 없음)"
+                score = c.get("score", 0.0)
+                lines.append(f"  {mark} [{j}] {title} (score={score:.3f})")
         if sufficient is not None:
             lines.append(f"sufficient: {sufficient} | reason: {reason}")
         if sources:

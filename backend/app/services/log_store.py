@@ -75,6 +75,7 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     "title": {"type": "keyword"},
                     "url": {"type": "keyword"},
                     "score": {"type": "float"},
+                    "used": {"type": "boolean"},
                 },
             },
             "sufficient": {"type": "boolean"},
