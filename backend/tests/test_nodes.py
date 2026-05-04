@@ -170,6 +170,43 @@ async def test_query_reform_expands_followup(stub_judge):
 
 
 @pytest.mark.asyncio
+async def test_query_reform_bare_topic_inherits_predicate(stub_judge):
+    """Bare-topic ellipsis ("리밸런싱은?") should inherit the predicate from
+    the prior turn so the search query is grammatically complete."""
+    stub_judge(
+        ['{"reformed_query": "Kafka consumer group 리밸런싱은 어떻게 동작해?"}']
+    )
+    state = {
+        "current_query": "리밸런싱은?",
+        "messages": [
+            {"role": "user", "content": "Kafka consumer group 어떻게 동작해?"},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "리밸런싱은?"},
+        ],
+    }
+    out = await query_reform(state)
+    assert "Kafka" in out["resolved_query"]
+    assert "리밸런싱" in out["resolved_query"]
+
+
+@pytest.mark.asyncio
+async def test_query_reform_substitutes_demonstrative(stub_judge):
+    """`그거` should be replaced with the concrete prior topic."""
+    stub_judge(['{"reformed_query": "사내 ES 운영 표준 페이지 위치"}'])
+    state = {
+        "current_query": "그거 어디 있어?",
+        "messages": [
+            {"role": "user", "content": "사내 위키에 ES 운영 표준 페이지 있어?"},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "그거 어디 있어?"},
+        ],
+    }
+    out = await query_reform(state)
+    assert "그거" not in out["resolved_query"]
+    assert "ES" in out["resolved_query"] or "Elasticsearch" in out["resolved_query"]
+
+
+@pytest.mark.asyncio
 async def test_query_reform_topic_switch_keeps_current(stub_judge):
     """When the current question introduces a new topic with its own subject,
     the LLM should return it nearly unchanged — never fuse with prior topic."""

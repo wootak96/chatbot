@@ -88,60 +88,74 @@ Your task:
 """
 
 
-QUERY_REFORM = """You rewrite a follow-up question from a multi-turn conversation into a single, self-contained Korean sentence.
+QUERY_REFORM = """You rewrite a multi-turn follow-up question by substituting Korean referential expressions (지시어/대명사) with the concrete topic from prior turns. This is the ONLY job of this step — narrow demonstrative-pronoun substitution, nothing more.
 
-First decide which case the current question is, then act accordingly:
+REWRITE only when the current question contains one of these REFERENTIAL TRIGGERS pointing back at history:
+1. Demonstrative pronouns
+   - 이것 / 그것 / 저것, 이거 / 그거 / 저거, 이게 / 그게 / 저게
+   - 이런 / 그런 / 저런, 이렇게 / 그렇게 / 저렇게
+2. Place / direction demonstratives
+   - 여기 / 거기 / 저기, 이리 / 그리 / 저리
+3. Connective adverbs that anchor on the prior turn
+   - 그러면 / 그럼 / 그래서 / 그러니까
+4. Group references back to earlier items
+   - 둘 / 둘 중 / 둘 다 / 셋 다
+5a. A bare predicate / interrogative WITHOUT its own explicit topic
+   - "어떻게 설정해?", "왜 그래?", "어디서 받아?", "그래서?", "더?", "또?"
+   (the verb has no object/topic in the current sentence — fill it from history)
+5b. A bare topic phrase ending in a topic marker (은/는/이/가) WITHOUT its own predicate
+   - "리밸런싱은?", "벡터 차원수는?", "9버전은?", "사내 가이드는?"
+   (the topic exists but the question/predicate must be inferred from history; fill the verb/intent from the prior turn)
 
-(A) FOLLOW-UP — the question depends on prior context. Signals:
-    - Contains referential expressions ("그게", "그러면", "그 다음", "더 자세히", "어떻게", "둘 중", "거기", "이게")
-    - Missing subject/object that must be filled from history to be searchable
-    - Otherwise grammatically incomplete on its own
-    → Resolve the references using the most recent matching topic in history.
+DO NOT REWRITE — return the input UNCHANGED:
+- The current question already names its own explicit topic/subject (e.g., "CPU alert 설정은 어떻게 해?" has "CPU alert 설정" as the topic — do NOT graft prior topic onto it).
+- The current question's topic clearly differs from history.
+- No history is available.
 
-(B) TOPIC SWITCH — the question already names its own subject and is independent of prior turns. Signals:
-    - Has a complete subject + predicate of its own
-    - Names a different concept/system than the prior turn
-    - No pronouns or omitted subjects pointing back at history
-    → Return the question NEARLY UNCHANGED. Do NOT graft the prior topic into it.
+When in doubt, return the input unchanged. False fusion ("Elasticsearch 설치 스크립트의 CPU alert 설정") is much worse than a slightly under-specified query.
 
-Critical: when in doubt, prefer keeping the question intact rather than fusing topics. Multi-turn conversations frequently change subject — false fusion ("Elasticsearch 설치 스크립트의 CPU alert 설정") is much worse than a slightly under-expanded query.
-
-Rules:
-- Output a SINGLE Korean sentence.
-- Replace referential expressions ONLY when the current question is case (A).
-- Insert omitted subjects from history ONLY when grammatically incomplete on its own.
-- NEVER merge two unrelated topics into one sentence.
-- Do NOT add new information or speculate (only expand to a searchable form).
-- Output in Korean (do NOT translate to English — translation is handled by a downstream node).
+Output a SINGLE Korean sentence (or the input verbatim if no trigger applies). Do NOT translate to English.
 
 예시
-1. (FOLLOW-UP — omitted subject) history: "사용자: Elasticsearch RRF가 뭐야?\\n어시스턴트: ..."
+1. (TRIGGER 5a — bare predicate "설정해", no topic in current)
+   history: "사용자: Elasticsearch RRF가 뭐야?\\n어시스턴트: ..."
    current: "어떻게 설정해?"
-   → "Elasticsearch RRF 설정 방법"
+   → "Elasticsearch RRF 어떻게 설정해?"
 
-2. (FOLLOW-UP — omitted subject) history: "사용자: Kafka consumer group 어떻게 동작해?\\n어시스턴트: ..."
-   current: "리밸런싱은?"
-   → "Kafka consumer group 리밸런싱 동작 원리"
-
-3. (FOLLOW-UP — pronoun "둘") history: "사용자: ES와 Kafka 비교해줘\\n어시스턴트: ..."
+2. (TRIGGER 4 — "둘 중" refers to ES & Kafka)
+   history: "사용자: ES와 Kafka 비교해줘\\n어시스턴트: ..."
    current: "둘 중 어떤 게 나아?"
    → "Elasticsearch와 Kafka 중 어떤 것이 더 적합한지"
 
-4. (NO HISTORY) history: (없음)
+3. (TRIGGER 3 — "그러면")
+   history: "사용자: Elasticsearch 9버전 출시됐어?\\n어시스턴트: ..."
+   current: "그러면 사내 클러스터도 9로 올려도 돼?"
+   → "Elasticsearch 9 사내 클러스터 업그레이드 가능 여부"
+
+4. (TRIGGER 1 — "그거")
+   history: "사용자: 사내 위키에 ES 운영 표준 페이지 있어?\\n어시스턴트: ..."
+   current: "그거 어디 있어?"
+   → "사내 ES 운영 표준 페이지 위치"
+
+5. (TRIGGER 5b — bare topic "리밸런싱은", predicate inferred from prior turn's "어떻게 동작해")
+   history: "사용자: Kafka consumer group 어떻게 동작해?\\n어시스턴트: ..."
+   current: "리밸런싱은?"
+   → "Kafka consumer group 리밸런싱은 어떻게 동작해?"
+
+6. (NO TRIGGER — current has its own topic AND predicate "CPU alert 설정은 어떻게 해?")
+   history: "사용자: Elasticsearch 설치 스크립트 작성해줘\\n어시스턴트: ..."
+   current: "CPU alert 설정은 어떻게 해?"
+   → "CPU alert 설정은 어떻게 해?"
+
+7. (NO TRIGGER — different system, complete topic)
+   history: "사용자: Kafka 토픽 파티션 동작은?\\n어시스턴트: ..."
+   current: "Elasticsearch 9 release notes 알려줘"
+   → "Elasticsearch 9 release notes 알려줘"
+
+8. (NO HISTORY)
+   history: (없음)
    current: "BM25가 뭐야?"
    → "BM25가 뭐야?"
-
-5. (TOPIC SWITCH — has its own subject "CPU alert 설정") history: "사용자: Elasticsearch 설치 스크립트 작성해줘\\n어시스턴트: ..."
-   current: "CPU alert 설정은 어떻게 해?"
-   → "CPU alert 설정 방법"   (must NOT become "Elasticsearch 설치 스크립트의 CPU alert 설정")
-
-6. (TOPIC SWITCH — different system) history: "사용자: Kafka 토픽 파티션 동작은?\\n어시스턴트: ..."
-   current: "Elasticsearch 9 release notes 알려줘"
-   → "Elasticsearch 9 release notes"
-
-7. (TOPIC SWITCH — different doc type) history: "사용자: ES kNN 튜닝 가이드\\n어시스턴트: ..."
-   current: "사내 Kafka 운영 표준 알려줘"
-   → "사내 Kafka 운영 표준"   (do NOT inherit "ES kNN" from history)
 
 Respond ONLY with this JSON. No other text.
 {{"reformed_query": "..."}}
