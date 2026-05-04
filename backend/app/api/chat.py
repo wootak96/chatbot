@@ -187,30 +187,19 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                 fallback, model=request.model, completion_id=completion_id
             )
 
-    # Now that we have the full answer, list which docs were actually cited as
-    # `[N]`. self_check no longer emits per-doc ✓/✗ (it can't — runs before
-    # generate); this post-stream chunk gives the UI accurate citation marks.
+    # Post-stream diagnostics (cited-docs list + groundedness verdict) are
+    # captured into progress_log_lines / final state for the persisted log
+    # and the debug_explain trace, but NOT streamed to the UI — users
+    # didn't want the trailing clutter under the answer.
     cited_msg = _format_cited_docs(final_state, streamed_answer_buf)
     if cited_msg:
         progress_log_lines.append(cited_msg)
-        yield sse.text_chunk(
-            cited_msg + "\n", model=request.model, completion_id=completion_id
-        )
 
-    # Groundedness post-check — verify each `[N]`-cited claim is actually
-    # supported by the cited doc. Skipped automatically when there's nothing
-    # to verify (chitchat / general / debugging / "정보 없음" answers).
     groundedness: dict[str, Any] = {}
     answer_full = "".join(streamed_answer_buf) or final_state.get("final_answer", "")
     candidates_for_check = final_state.get("candidates") or []
     cited_for_check = _extract_cited_indices(answer_full)
     if candidates_for_check and cited_for_check:
-        progress_log_lines.append("🔬 답변 근거 검증 중...")
-        yield sse.text_chunk(
-            "🔬 답변 근거 검증 중...\n",
-            model=request.model,
-            completion_id=completion_id,
-        )
         groundedness = await run_groundedness_check(
             answer=answer_full,
             candidates=candidates_for_check,
@@ -219,11 +208,6 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
         verdict_msg = format_groundedness_progress(groundedness)
         if verdict_msg:
             progress_log_lines.append(verdict_msg)
-            yield sse.text_chunk(
-                verdict_msg + "\n",
-                model=request.model,
-                completion_id=completion_id,
-            )
 
     # Emit a hidden CITES marker so the frontend can wrap inline [N] tokens in
     # the answer with clickable links to the corresponding source URL. We drop
