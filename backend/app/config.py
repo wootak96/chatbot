@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     es_index_elasticsearch: str = "elasticsearch_docs"
     es_index_kafka: str = "kafka_docs"
     es_index_confluence: str = "confluence_docs"
+    # Unified per-turn chat log index. user_id is a keyword field on each
+    # document, not part of the index name, so debug_explain can filter by
+    # user without operating on per-user indices.
+    es_index_chat_logs: str = "chat_logs"
 
     es_field_title: str = "title"
     es_field_content: str = "content"

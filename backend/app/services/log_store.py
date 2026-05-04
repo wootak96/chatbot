@@ -1,13 +1,9 @@
-"""Per-user chat log storage in Elasticsearch.
+"""Unified chat-log storage in Elasticsearch.
 
-Each authenticated user has a dedicated `{sanitized_user_id}_logs` index.
 Every chat turn (question + final answer + full RAG trace) is stored as one
-document. Used by the `debug_explain` node to retrospectively explain why a
-prior answer was produced.
-
-The index name is derived deterministically from `user_id` after sanitization
-(ES requires lowercase + a restricted alphabet). Index creation is lazy and
-idempotent.
+document in the shared `chat_logs` index, with `user_id` as a keyword field
+on the document — no per-user indices. `debug_explain` filters by user_id
+to retrieve a user's recent turns.
 
 Failures are best-effort logged — saving a turn must never block the chat
 response.
@@ -16,12 +12,12 @@ response.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch
 
+from app.config import get_settings
 from app.services.elasticsearch_client import get_es_client
 
 logger = logging.getLogger(__name__)
@@ -130,34 +126,19 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
 }
 
 
-def sanitize_user_id(user_id: str) -> str:
-    """Convert a frontend user_id into a valid ES index-name fragment.
-
-    ES requires lowercase + `[a-z0-9_-]`. Anything else collapses to `_`.
-    Returns an empty string when no usable characters remain (caller must
-    treat that as "no log persistence")."""
-    if not user_id:
-        return ""
-    cleaned = re.sub(r"[^a-z0-9_-]", "_", user_id.lower())
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_-")
-    return cleaned
-
-
-def log_index_name(user_id: str) -> str:
-    safe = sanitize_user_id(user_id)
-    if not safe:
-        return ""
-    return f"{safe}_logs"
+def chat_logs_index_name() -> str:
+    """Resolve the shared chat-logs index name from settings."""
+    return get_settings().es_index_chat_logs
 
 
 async def ensure_log_index(
-    user_id: str, *, client: AsyncElasticsearch | None = None
+    *, client: AsyncElasticsearch | None = None
 ) -> str:
-    """Idempotently create `{user_id}_logs` with the chat-log mapping.
+    """Idempotently create the shared chat-logs index.
 
-    Returns the resolved index name (empty string when the user_id is unusable
+    Returns the resolved index name (empty string when the setting is blank
     so the caller can short-circuit)."""
-    name = log_index_name(user_id)
+    name = chat_logs_index_name()
     if not name:
         return ""
     es = client or get_es_client()
@@ -176,19 +157,24 @@ async def save_turn(
     *,
     client: AsyncElasticsearch | None = None,
 ) -> None:
-    """Best-effort: index one chat-turn document. Failures only log."""
-    name = log_index_name(user_id)
+    """Best-effort: index one chat-turn document. user_id is stored as a
+    keyword field, not used for index naming. Failures only log."""
+    if not user_id:
+        return  # unauthenticated — no log persistence
+    name = chat_logs_index_name()
     if not name:
         return
     es = client or get_es_client()
     try:
-        await ensure_log_index(user_id, client=es)
+        await ensure_log_index(client=es)
         body = dict(doc)
-        body.setdefault("user_id", user_id)
+        # Always set user_id from the trusted caller arg, never from the
+        # incoming doc, to prevent cross-user spoofing.
+        body["user_id"] = user_id
         body.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
         await es.index(index=name, body=body)
     except Exception as e:
-        logger.warning("save_turn(%s) failed: %s", name, e)
+        logger.warning("save_turn(user_id=%s) failed: %s", user_id, e)
 
 
 async def fetch_recent_turns(
@@ -197,9 +183,12 @@ async def fetch_recent_turns(
     n: int = 3,
     client: AsyncElasticsearch | None = None,
 ) -> list[dict[str, Any]]:
-    """Returns the `n` most recent stored turns (newest first). Empty list on
-    any error or when the user has no logs yet."""
-    name = log_index_name(user_id)
+    """Return the `n` most recent stored turns for `user_id` (newest first).
+    Empty list when user_id is missing, the index doesn't exist yet, or on
+    any ES error."""
+    if not user_id:
+        return []
+    name = chat_logs_index_name()
     if not name:
         return []
     es = client or get_es_client()
@@ -210,11 +199,11 @@ async def fetch_recent_turns(
         body = {
             "size": n,
             "sort": [{"timestamp": {"order": "desc"}}],
-            "query": {"match_all": {}},
+            "query": {"bool": {"filter": [{"term": {"user_id": user_id}}]}},
         }
         r = await es.search(index=name, body=body)
         hits = r.get("hits", {}).get("hits", [])
         return [h.get("_source", {}) for h in hits]
     except Exception as e:
-        logger.warning("fetch_recent_turns(%s) failed: %s", name, e)
+        logger.warning("fetch_recent_turns(user_id=%s) failed: %s", user_id, e)
         return []

@@ -1,4 +1,4 @@
-"""Tests for the per-user chat log store.
+"""Tests for the unified chat-log store.
 
 We never hit a real ES — `AsyncElasticsearch` is replaced with an in-memory
 fake that records every method invocation. Index creation is asserted to be
@@ -9,32 +9,15 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import get_settings
 from app.services import log_store
 
 
-# ---------- sanitize_user_id ----------
+# ---------- index name resolution ----------
 
 
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ("Alice", "alice"),                 # uppercase
-        ("user.name", "user_name"),         # dot disallowed by ES
-        ("user--name", "user--name"),       # hyphens allowed
-        ("__weird__id__", "weird_id"),     # collapse + strip leading/trailing _
-        ("", ""),                           # empty stays empty (no log persistence)
-        (None, ""),                         # defensive None
-        ("UPPER.WITH.dots", "upper_with_dots"),
-        ("@@@", ""),                        # all-bad → empty
-    ],
-)
-def test_sanitize_user_id(raw, expected):
-    assert log_store.sanitize_user_id(raw) == expected
-
-
-def test_log_index_name_appends_suffix():
-    assert log_store.log_index_name("Alice") == "alice_logs"
-    assert log_store.log_index_name("@@@") == ""  # unusable → ""
+def test_chat_logs_index_name_from_settings():
+    assert log_store.chat_logs_index_name() == get_settings().es_index_chat_logs
 
 
 # ---------- ES interactions ----------
@@ -72,29 +55,23 @@ class FakeES:
 @pytest.mark.asyncio
 async def test_ensure_log_index_creates_when_missing():
     es = FakeES(exists_value=False)
-    name = await log_store.ensure_log_index("alice", client=es)
-    assert name == "alice_logs"
-    assert es.indices.exists_calls == ["alice_logs"]
+    name = await log_store.ensure_log_index(client=es)
+    expected = log_store.chat_logs_index_name()
+    assert name == expected
+    assert es.indices.exists_calls == [expected]
     assert len(es.indices.create_calls) == 1
-    assert es.indices.create_calls[0]["index"] == "alice_logs"
+    assert es.indices.create_calls[0]["index"] == expected
 
 
 @pytest.mark.asyncio
 async def test_ensure_log_index_skips_when_exists():
     es = FakeES(exists_value=True)
-    await log_store.ensure_log_index("alice", client=es)
+    await log_store.ensure_log_index(client=es)
     assert es.indices.create_calls == []  # no-op
 
 
 @pytest.mark.asyncio
-async def test_ensure_log_index_empty_user_id_returns_empty():
-    es = FakeES()
-    assert await log_store.ensure_log_index("", client=es) == ""
-    assert es.indices.exists_calls == []
-
-
-@pytest.mark.asyncio
-async def test_save_turn_indexes_doc_with_defaults():
+async def test_save_turn_writes_to_shared_index_with_user_id_field():
     es = FakeES(exists_value=True)
     await log_store.save_turn(
         "alice",
@@ -103,12 +80,24 @@ async def test_save_turn_indexes_doc_with_defaults():
     )
     assert len(es.index_calls) == 1
     call = es.index_calls[0]
-    assert call["index"] == "alice_logs"
+    assert call["index"] == log_store.chat_logs_index_name()
     body = call["body"]
     assert body["question"] == "Q"
     assert body["final_answer"] == "A"
-    assert body["user_id"] == "alice"  # auto-defaulted
+    assert body["user_id"] == "alice"  # from the trusted arg
     assert "timestamp" in body  # auto-defaulted
+
+
+@pytest.mark.asyncio
+async def test_save_turn_overrides_spoofed_user_id():
+    """Caller-provided user_id always wins over a doc's own user_id field."""
+    es = FakeES(exists_value=True)
+    await log_store.save_turn(
+        "alice",
+        {"question": "Q", "user_id": "mallory"},
+        client=es,
+    )
+    assert es.index_calls[0]["body"]["user_id"] == "alice"
 
 
 @pytest.mark.asyncio
@@ -136,19 +125,30 @@ async def test_save_turn_swallows_es_errors():
 
 
 @pytest.mark.asyncio
-async def test_fetch_recent_turns_returns_sources_newest_first():
+async def test_fetch_recent_turns_filters_by_user_id():
     hits = [
-        {"_source": {"question": "Q1", "timestamp": "2026-04-30T10:00:00Z"}},
-        {"_source": {"question": "Q2", "timestamp": "2026-04-30T09:00:00Z"}},
-        {"_source": {"question": "Q3", "timestamp": "2026-04-30T08:00:00Z"}},
+        {"_source": {"question": "Q1", "user_id": "alice"}},
+        {"_source": {"question": "Q2", "user_id": "alice"}},
     ]
     es = FakeES(exists_value=True, search_hits=hits)
     out = await log_store.fetch_recent_turns("alice", n=3, client=es)
-    assert [t["question"] for t in out] == ["Q1", "Q2", "Q3"]
-    # Verify the search body asked for desc timestamp and size=3.
+    assert [t["question"] for t in out] == ["Q1", "Q2"]
     body = es.search_calls[0]["body"]
     assert body["size"] == 3
     assert body["sort"][0]["timestamp"]["order"] == "desc"
+    # Verify the user_id term filter is applied.
+    flt = body["query"]["bool"]["filter"]
+    assert {"term": {"user_id": "alice"}} in flt
+    # Verify it queries the shared index.
+    assert es.search_calls[0]["index"] == log_store.chat_logs_index_name()
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_turns_empty_when_user_id_missing():
+    es = FakeES()
+    out = await log_store.fetch_recent_turns("", client=es)
+    assert out == []
+    assert es.search_calls == []
 
 
 @pytest.mark.asyncio
