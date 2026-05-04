@@ -27,6 +27,7 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
     "mappings": {
         "properties": {
             "user_id": {"type": "keyword"},
+            "session_id": {"type": "keyword"},
             "timestamp": {"type": "date"},
             "question": {"type": "text"},
             "resolved_query": {"type": "text"},
@@ -155,10 +156,11 @@ async def save_turn(
     user_id: str,
     doc: dict[str, Any],
     *,
+    session_id: str = "",
     client: AsyncElasticsearch | None = None,
 ) -> None:
-    """Best-effort: index one chat-turn document. user_id is stored as a
-    keyword field, not used for index naming. Failures only log."""
+    """Best-effort: index one chat-turn document. user_id and session_id are
+    stored as keyword fields. Failures only log."""
     if not user_id:
         return  # unauthenticated — no log persistence
     name = chat_logs_index_name()
@@ -168,25 +170,33 @@ async def save_turn(
     try:
         await ensure_log_index(client=es)
         body = dict(doc)
-        # Always set user_id from the trusted caller arg, never from the
-        # incoming doc, to prevent cross-user spoofing.
+        # Always set user_id / session_id from the trusted caller args, never
+        # from the incoming doc, to prevent cross-user / cross-session spoofing.
         body["user_id"] = user_id
+        body["session_id"] = session_id or ""
         body.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
         await es.index(index=name, body=body)
     except Exception as e:
-        logger.warning("save_turn(user_id=%s) failed: %s", user_id, e)
+        logger.warning(
+            "save_turn(user_id=%s, session_id=%s) failed: %s",
+            user_id,
+            session_id,
+            e,
+        )
 
 
 async def fetch_recent_turns(
     user_id: str,
     *,
+    session_id: str = "",
     n: int = 3,
     client: AsyncElasticsearch | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the `n` most recent stored turns for `user_id` (newest first).
-    Empty list when user_id is missing, the index doesn't exist yet, or on
-    any ES error."""
-    if not user_id:
+    """Return the `n` most recent stored turns for (user_id, session_id),
+    newest first. session_id is required: a fresh chat thread should NOT pull
+    turns from the user's previous conversations. Empty list when either id
+    is missing, the index doesn't exist yet, or on any ES error."""
+    if not user_id or not session_id:
         return []
     name = chat_logs_index_name()
     if not name:
@@ -199,11 +209,23 @@ async def fetch_recent_turns(
         body = {
             "size": n,
             "sort": [{"timestamp": {"order": "desc"}}],
-            "query": {"bool": {"filter": [{"term": {"user_id": user_id}}]}},
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"user_id": user_id}},
+                        {"term": {"session_id": session_id}},
+                    ]
+                }
+            },
         }
         r = await es.search(index=name, body=body)
         hits = r.get("hits", {}).get("hits", [])
         return [h.get("_source", {}) for h in hits]
     except Exception as e:
-        logger.warning("fetch_recent_turns(user_id=%s) failed: %s", user_id, e)
+        logger.warning(
+            "fetch_recent_turns(user_id=%s, session_id=%s) failed: %s",
+            user_id,
+            session_id,
+            e,
+        )
         return []

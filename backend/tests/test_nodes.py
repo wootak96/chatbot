@@ -590,13 +590,31 @@ async def test_debug_explain_no_user_id_returns_guidance(stub_generator):
 
 
 @pytest.mark.asyncio
+async def test_debug_explain_no_session_id_returns_guidance(stub_generator):
+    """user_id present but session_id missing — refuse to mix prior threads."""
+    stub_generator([])  # not called
+    from app.graph.nodes.debug_explain import debug_explain
+
+    out = await debug_explain(
+        {
+            "intent": "debugging",
+            "current_query": "왜?",
+            "user_id": "alice",
+            "session_id": "",
+        }
+    )
+    assert "session_id" in out["final_answer"]
+    assert out["sources"] == []
+
+
+@pytest.mark.asyncio
 async def test_debug_explain_no_logs_returns_no_history_message(
     monkeypatch, stub_generator
 ):
     """When the user has no stored turns, return a helpful explanation."""
     stub_generator([])  # not called
 
-    async def empty_fetch(user_id, *, n=3, client=None):
+    async def empty_fetch(user_id, *, session_id="", n=3, client=None):
         return []
 
     from app.graph.nodes import debug_explain as debug_explain_mod
@@ -604,9 +622,14 @@ async def test_debug_explain_no_logs_returns_no_history_message(
     monkeypatch.setattr(debug_explain_mod, "fetch_recent_turns", empty_fetch)
 
     out = await debug_explain_mod.debug_explain(
-        {"intent": "debugging", "current_query": "왜?", "user_id": "alice"}
+        {
+            "intent": "debugging",
+            "current_query": "왜?",
+            "user_id": "alice",
+            "session_id": "sess-1",
+        }
     )
-    assert "최근 대화 기록" in out["final_answer"]
+    assert "현재 세션" in out["final_answer"]
 
 
 @pytest.mark.asyncio
@@ -638,8 +661,9 @@ async def test_debug_explain_uses_recent_turns_in_prompt(
         }
     ]
 
-    async def fake_fetch(user_id, *, n=3, client=None):
+    async def fake_fetch(user_id, *, session_id="", n=3, client=None):
         assert user_id == "alice"
+        assert session_id == "sess-1"
         return canned_turns
 
     from app.graph.nodes import debug_explain as debug_explain_mod
@@ -653,6 +677,7 @@ async def test_debug_explain_uses_recent_turns_in_prompt(
             "intent": "debugging",
             "current_query": "왜 그렇게 답했어?",
             "user_id": "alice",
+            "session_id": "sess-1",
         }
     )
     assert "Turn 1" in out["final_answer"]

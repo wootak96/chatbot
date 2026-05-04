@@ -55,6 +55,11 @@ class ChatRequest(BaseModel):
     # Logged-in user id from the frontend URL param. Empty / absent means
     # "no log persistence and debug-mode questions cannot fetch context".
     user_id: str | None = None
+    # Per-conversation session id (UUID generated on the frontend). Resets on
+    # "대화 초기화" / re-login so debug_explain only sees turns from the
+    # current thread. Empty when frontend doesn't supply one — log persists
+    # but debug fetch returns nothing.
+    session_id: str | None = None
 
 
 async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
@@ -62,7 +67,12 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     yield sse.role_chunk(model=request.model, completion_id=completion_id)
 
     user_id = (request.user_id or "").strip()
-    state = initial_state([m.model_dump() for m in request.messages], user_id=user_id)
+    session_id = (request.session_id or "").strip()
+    state = initial_state(
+        [m.model_dump() for m in request.messages],
+        user_id=user_id,
+        session_id=session_id,
+    )
     workflow = get_workflow()
 
     final_state: dict[str, Any] = dict(state)
@@ -255,6 +265,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     token_usage_by_node,
                     groundedness,
                 ),
+                session_id=session_id,
             )
         except Exception as e:  # belt-and-braces — save_turn already swallows
             logger.warning("Chat-turn log save failed: %s", e)

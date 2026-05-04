@@ -338,12 +338,30 @@ CHAT_HTML = """<!doctype html>
 
   // Per-user message storage so different ids don't collide.
   const STORAGE_KEY = 'rag-chat:messages:v2:' + userId;
+  // Per-conversation session id (UUID). Reset on "대화 초기화" so debug-mode
+  // questions only see turns from the current thread. Persists across reload.
+  const SESSION_KEY = 'rag-chat:session:v1:' + userId;
 
   let messages = [];  // [{role, content}]
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) messages = JSON.parse(saved);
   } catch (e) { messages = []; }
+
+  function newSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    return 'sess-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+  let sessionId;
+  try {
+    sessionId = localStorage.getItem(SESSION_KEY) || '';
+  } catch (e) { sessionId = ''; }
+  if (!sessionId) {
+    sessionId = newSessionId();
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
+  }
 
   function autosize() {
     input.style.height = 'auto';
@@ -361,6 +379,9 @@ CHAT_HTML = """<!doctype html>
     if (messages.length && !confirm('대화를 모두 지울까요?')) return;
     messages = [];
     localStorage.removeItem(STORAGE_KEY);
+    // Start a new session — debug-mode follow-ups won't pull from prior thread.
+    sessionId = newSessionId();
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
     rerenderHistory();
   });
   logoutBtn.addEventListener('click', () => {
@@ -596,6 +617,7 @@ CHAT_HTML = """<!doctype html>
           messages: messages,
           stream: true,
           user_id: userId,
+          session_id: sessionId,
         }),
       });
       if (!resp.ok || !resp.body) {

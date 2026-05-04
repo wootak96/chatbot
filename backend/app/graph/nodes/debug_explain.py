@@ -135,6 +135,7 @@ def _render_turns(turns: list[dict]) -> str:
 
 async def debug_explain(state: RAGState) -> dict:
     user_id = state.get("user_id") or ""
+    session_id = state.get("session_id") or ""
     query = state.get("resolved_query") or state.get("current_query") or ""
 
     if not user_id:
@@ -146,14 +147,23 @@ async def debug_explain(state: RAGState) -> dict:
             "sources": [],
             PROGRESS_KEY: "🐛 디버깅 모드: user_id 미전송 — 로그 조회 불가",
         }
+    if not session_id:
+        return {
+            "final_answer": (
+                "디버깅 모드는 세션 단위로 동작합니다 "
+                "(현재 요청에 session_id가 포함되지 않아 동일 세션의 이전 턴을 조회할 수 없습니다)."
+            ),
+            "sources": [],
+            PROGRESS_KEY: "🐛 디버깅 모드: session_id 미전송 — 로그 조회 불가",
+        }
 
-    turns = await fetch_recent_turns(user_id, n=_RECENT_N)
+    turns = await fetch_recent_turns(user_id, session_id=session_id, n=_RECENT_N)
 
     if not turns:
         return {
-            "final_answer": "최근 대화 기록이 없어 디버깅할 수 없습니다.",
+            "final_answer": "현재 세션에 최근 대화 기록이 없어 디버깅할 수 없습니다.",
             "sources": [],
-            PROGRESS_KEY: "🐛 디버깅 모드: 최근 로그 없음",
+            PROGRESS_KEY: "🐛 디버깅 모드: 현재 세션의 최근 로그 없음",
         }
 
     context = _render_turns(turns)

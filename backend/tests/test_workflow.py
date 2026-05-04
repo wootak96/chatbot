@@ -395,7 +395,7 @@ async def test_workflow_debugging_path_replays_logs(
         }
     ]
 
-    async def fake_fetch(user_id, *, n=3, client=None):
+    async def fake_fetch(user_id, *, session_id="", n=3, client=None):
         return canned_turns
 
     from app.graph.nodes import debug_explain as debug_explain_mod
@@ -406,6 +406,7 @@ async def test_workflow_debugging_path_replays_logs(
     state = initial_state(
         [{"role": "user", "content": "왜 답변이 이렇게 나왔어?"}],
         user_id="alice",
+        session_id="sess-1",
     )
     final = await workflow.ainvoke(state)
 

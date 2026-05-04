@@ -76,6 +76,7 @@ async def test_save_turn_writes_to_shared_index_with_user_id_field():
     await log_store.save_turn(
         "alice",
         {"question": "Q", "final_answer": "A"},
+        session_id="sess-1",
         client=es,
     )
     assert len(es.index_calls) == 1
@@ -85,19 +86,23 @@ async def test_save_turn_writes_to_shared_index_with_user_id_field():
     assert body["question"] == "Q"
     assert body["final_answer"] == "A"
     assert body["user_id"] == "alice"  # from the trusted arg
+    assert body["session_id"] == "sess-1"  # from the trusted arg
     assert "timestamp" in body  # auto-defaulted
 
 
 @pytest.mark.asyncio
-async def test_save_turn_overrides_spoofed_user_id():
-    """Caller-provided user_id always wins over a doc's own user_id field."""
+async def test_save_turn_overrides_spoofed_user_id_and_session_id():
+    """Caller-provided ids always win over doc-supplied ones."""
     es = FakeES(exists_value=True)
     await log_store.save_turn(
         "alice",
-        {"question": "Q", "user_id": "mallory"},
+        {"question": "Q", "user_id": "mallory", "session_id": "evil-session"},
+        session_id="sess-1",
         client=es,
     )
-    assert es.index_calls[0]["body"]["user_id"] == "alice"
+    body = es.index_calls[0]["body"]
+    assert body["user_id"] == "alice"
+    assert body["session_id"] == "sess-1"
 
 
 @pytest.mark.asyncio
@@ -125,28 +130,38 @@ async def test_save_turn_swallows_es_errors():
 
 
 @pytest.mark.asyncio
-async def test_fetch_recent_turns_filters_by_user_id():
+async def test_fetch_recent_turns_filters_by_user_and_session():
     hits = [
-        {"_source": {"question": "Q1", "user_id": "alice"}},
-        {"_source": {"question": "Q2", "user_id": "alice"}},
+        {"_source": {"question": "Q1", "user_id": "alice", "session_id": "sess-1"}},
+        {"_source": {"question": "Q2", "user_id": "alice", "session_id": "sess-1"}},
     ]
     es = FakeES(exists_value=True, search_hits=hits)
-    out = await log_store.fetch_recent_turns("alice", n=3, client=es)
+    out = await log_store.fetch_recent_turns(
+        "alice", session_id="sess-1", n=3, client=es
+    )
     assert [t["question"] for t in out] == ["Q1", "Q2"]
     body = es.search_calls[0]["body"]
     assert body["size"] == 3
     assert body["sort"][0]["timestamp"]["order"] == "desc"
-    # Verify the user_id term filter is applied.
     flt = body["query"]["bool"]["filter"]
     assert {"term": {"user_id": "alice"}} in flt
-    # Verify it queries the shared index.
+    assert {"term": {"session_id": "sess-1"}} in flt
     assert es.search_calls[0]["index"] == log_store.chat_logs_index_name()
 
 
 @pytest.mark.asyncio
 async def test_fetch_recent_turns_empty_when_user_id_missing():
     es = FakeES()
-    out = await log_store.fetch_recent_turns("", client=es)
+    out = await log_store.fetch_recent_turns("", session_id="sess-1", client=es)
+    assert out == []
+    assert es.search_calls == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_turns_empty_when_session_id_missing():
+    """No session_id → don't fetch anything (would mix prior conversations)."""
+    es = FakeES(exists_value=True)
+    out = await log_store.fetch_recent_turns("alice", session_id="", client=es)
     assert out == []
     assert es.search_calls == []
 
