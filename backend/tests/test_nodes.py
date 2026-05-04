@@ -170,6 +170,23 @@ async def test_query_reform_expands_followup(stub_judge):
 
 
 @pytest.mark.asyncio
+async def test_query_reform_topic_switch_keeps_current(stub_judge):
+    """When the current question introduces a new topic with its own subject,
+    the LLM should return it nearly unchanged — never fuse with prior topic."""
+    stub_judge(['{"reformed_query": "CPU alert 설정 방법"}'])
+    state = {
+        "current_query": "CPU alert 설정은 어떻게 해?",
+        "messages": [
+            {"role": "user", "content": "Elasticsearch 설치 스크립트 작성해줘"},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "CPU alert 설정은 어떻게 해?"},
+        ],
+    }
+    out = await query_reform(state)
+    assert "설치 스크립트" not in out["resolved_query"]
+
+
+@pytest.mark.asyncio
 async def test_query_reform_falls_back_to_current_on_empty(stub_judge):
     """If LLM returns empty reformed_query, fall back to current_query."""
     stub_judge(['{"reformed_query": ""}'])

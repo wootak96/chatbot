@@ -90,31 +90,58 @@ Your task:
 
 QUERY_REFORM = """You rewrite a follow-up question from a multi-turn conversation into a single, self-contained Korean sentence.
 
-Given the conversation history and the current question, absorb the most recent topic and entities so that the output sentence is meaningful on its own. Output a single Korean sentence.
+First decide which case the current question is, then act accordingly:
+
+(A) FOLLOW-UP — the question depends on prior context. Signals:
+    - Contains referential expressions ("그게", "그러면", "그 다음", "더 자세히", "어떻게", "둘 중", "거기", "이게")
+    - Missing subject/object that must be filled from history to be searchable
+    - Otherwise grammatically incomplete on its own
+    → Resolve the references using the most recent matching topic in history.
+
+(B) TOPIC SWITCH — the question already names its own subject and is independent of prior turns. Signals:
+    - Has a complete subject + predicate of its own
+    - Names a different concept/system than the prior turn
+    - No pronouns or omitted subjects pointing back at history
+    → Return the question NEARLY UNCHANGED. Do NOT graft the prior topic into it.
+
+Critical: when in doubt, prefer keeping the question intact rather than fusing topics. Multi-turn conversations frequently change subject — false fusion ("Elasticsearch 설치 스크립트의 CPU alert 설정") is much worse than a slightly under-expanded query.
 
 Rules:
-- Replace referential expressions ("그게", "그러면", "그 다음", "더 자세히", "어떻게") with the previous topic.
-- Insert any omitted subject/object explicitly, pulling it from history.
+- Output a SINGLE Korean sentence.
+- Replace referential expressions ONLY when the current question is case (A).
+- Insert omitted subjects from history ONLY when grammatically incomplete on its own.
+- NEVER merge two unrelated topics into one sentence.
 - Do NOT add new information or speculate (only expand to a searchable form).
-- If the current question is already self-contained, return it almost unchanged.
 - Output in Korean (do NOT translate to English — translation is handled by a downstream node).
 
 예시
-1. history: "사용자: Elasticsearch RRF가 뭐야?\\n어시스턴트: ..."
+1. (FOLLOW-UP — omitted subject) history: "사용자: Elasticsearch RRF가 뭐야?\\n어시스턴트: ..."
    current: "어떻게 설정해?"
    → "Elasticsearch RRF 설정 방법"
 
-2. history: "사용자: Kafka consumer group 어떻게 동작해?\\n어시스턴트: ..."
+2. (FOLLOW-UP — omitted subject) history: "사용자: Kafka consumer group 어떻게 동작해?\\n어시스턴트: ..."
    current: "리밸런싱은?"
    → "Kafka consumer group 리밸런싱 동작 원리"
 
-3. history: "사용자: ES와 Kafka 비교해줘\\n어시스턴트: ..."
+3. (FOLLOW-UP — pronoun "둘") history: "사용자: ES와 Kafka 비교해줘\\n어시스턴트: ..."
    current: "둘 중 어떤 게 나아?"
    → "Elasticsearch와 Kafka 중 어떤 것이 더 적합한지"
 
-4. history: (없음)
+4. (NO HISTORY) history: (없음)
    current: "BM25가 뭐야?"
    → "BM25가 뭐야?"
+
+5. (TOPIC SWITCH — has its own subject "CPU alert 설정") history: "사용자: Elasticsearch 설치 스크립트 작성해줘\\n어시스턴트: ..."
+   current: "CPU alert 설정은 어떻게 해?"
+   → "CPU alert 설정 방법"   (must NOT become "Elasticsearch 설치 스크립트의 CPU alert 설정")
+
+6. (TOPIC SWITCH — different system) history: "사용자: Kafka 토픽 파티션 동작은?\\n어시스턴트: ..."
+   current: "Elasticsearch 9 release notes 알려줘"
+   → "Elasticsearch 9 release notes"
+
+7. (TOPIC SWITCH — different doc type) history: "사용자: ES kNN 튜닝 가이드\\n어시스턴트: ..."
+   current: "사내 Kafka 운영 표준 알려줘"
+   → "사내 Kafka 운영 표준"   (do NOT inherit "ES kNN" from history)
 
 Respond ONLY with this JSON. No other text.
 {{"reformed_query": "..."}}
