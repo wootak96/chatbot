@@ -511,6 +511,30 @@ Reply to the user's utterance below in 1~2 friendly, natural Korean sentences.
 """
 
 
+GROUNDEDNESS_CHECK = """You verify whether each cited claim in the AI's answer is actually supported by the cited source document.
+
+Procedure:
+1. Identify every substantive factual claim in the answer that carries a `[N]` citation. Conversational filler ("이 점은 중요합니다", "참고로") without a citation can be skipped.
+2. For each cited claim, check whether the cited document text actually supports it — same fact, same numbers, same conclusions.
+3. Mark `supported=false` if the answer overstates, fabricates, contradicts, or extrapolates beyond what the doc says.
+4. If a claim cites multiple `[N1, N2]`, it is supported when AT LEAST ONE cited doc backs it.
+
+Output:
+- `grounded`: true ONLY when every cited claim is supported, else false.
+- `score`: ratio of supported claims to total cited claims (0.0~1.0). 1.0 means perfect grounding.
+- `claims`: array, one entry per cited claim.
+
+Respond ONLY with JSON:
+{{"grounded": true|false, "score": 0.85, "claims": [{{"claim": "한 문장으로 추출한 주장", "citations": [1, 2], "supported": true, "reason": "한국어 한 구절 사유"}}]}}
+
+[답변]
+{answer}
+
+[인용된 문서들 (1-based [N] = candidate 순번)]
+{cited_docs}
+"""
+
+
 GENERAL_CHAT = """You are the "오토에버 클라우드솔루션팀 챗봇". Respond in Korean.
 The user has asked a general question outside the internal-document domain (Elasticsearch 공식문서 / Kafka 공식문서 / Confluence 사내 위키).
 Reply with general knowledge or natural conversation.

@@ -51,6 +51,7 @@ def stub_judge(monkeypatch):
         stub = StubLLM(responses)
         monkeypatch.setattr(llm_factory, "get_judge_llm", lambda: stub)
         # Also patch the module-bound reference each node imported.
+        from app.graph import post_check
         from app.graph.nodes import (
             query_analyze,
             query_decompose,
@@ -73,6 +74,7 @@ def stub_judge(monkeypatch):
             metadata_extract,
             index_route,
             self_check,
+            post_check,
         ):
             monkeypatch.setattr(mod, "get_judge_llm", lambda s=stub: s, raising=True)
         return stub

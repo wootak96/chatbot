@@ -89,6 +89,21 @@ def _render_turns(turns: list[dict]) -> str:
                 lines.append(f"  {mark} [{j}] {title} (score={score:.3f})")
         if sufficient is not None:
             lines.append(f"sufficient: {sufficient} | reason: {reason}")
+        groundedness = t.get("groundedness") or {}
+        if groundedness:
+            g_total = groundedness.get("total_claims", 0)
+            g_supp = groundedness.get("supported_count", 0)
+            g_score = float(groundedness.get("score") or 0.0)
+            lines.append(
+                f"groundedness: grounded={groundedness.get('grounded')} "
+                f"({g_supp}/{g_total} 주장 근거 있음, score={g_score:.2f})"
+            )
+            for c in (groundedness.get("claims") or [])[:5]:
+                mark = "✓" if c.get("supported") else "✗"
+                lines.append(
+                    f"  {mark} {c.get('claim', '')[:80]} "
+                    f"cites={c.get('citations', [])} — {c.get('reason', '')[:80]}"
+                )
         token_usage = t.get("token_usage") or {}
         if token_usage:
             lines.append(

@@ -19,6 +19,10 @@ from starlette.responses import StreamingResponse
 
 from app.api import sse
 from app.graph.nodes import PROGRESS_KEY
+from app.graph.post_check import (
+    format_groundedness_progress,
+    run_groundedness_check,
+)
 from app.graph.state import initial_state
 from app.graph.workflow import get_workflow
 from app.services.llm_factory import set_api_key
@@ -183,6 +187,34 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
             cited_msg + "\n", model=request.model, completion_id=completion_id
         )
 
+    # Groundedness post-check — verify each `[N]`-cited claim is actually
+    # supported by the cited doc. Skipped automatically when there's nothing
+    # to verify (chitchat / general / debugging / "정보 없음" answers).
+    groundedness: dict[str, Any] = {}
+    answer_full = "".join(streamed_answer_buf) or final_state.get("final_answer", "")
+    candidates_for_check = final_state.get("candidates") or []
+    cited_for_check = _extract_cited_indices(answer_full)
+    if candidates_for_check and cited_for_check:
+        progress_log_lines.append("🔬 답변 근거 검증 중...")
+        yield sse.text_chunk(
+            "🔬 답변 근거 검증 중...\n",
+            model=request.model,
+            completion_id=completion_id,
+        )
+        groundedness = await run_groundedness_check(
+            answer=answer_full,
+            candidates=candidates_for_check,
+            cited_indices=cited_for_check,
+        )
+        verdict_msg = format_groundedness_progress(groundedness)
+        if verdict_msg:
+            progress_log_lines.append(verdict_msg)
+            yield sse.text_chunk(
+                verdict_msg + "\n",
+                model=request.model,
+                completion_id=completion_id,
+            )
+
     # Emit a hidden CITES marker so the frontend can wrap inline [N] tokens in
     # the answer with clickable links to the corresponding source URL. We drop
     # the verbose **출처** block to save tokens — only N→url is needed since
@@ -221,6 +253,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     progress_log_lines,
                     streamed_answer_buf,
                     token_usage_by_node,
+                    groundedness,
                 ),
             )
         except Exception as e:  # belt-and-braces — save_turn already swallows
@@ -233,6 +266,7 @@ def _build_log_doc(
     progress_log_lines: list[str],
     streamed_answer_buf: list[str],
     token_usage_by_node: dict[str, dict[str, int]] | None = None,
+    groundedness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Flatten the final RAGState into the `{user_id}_logs` document shape."""
     last_user = next(
@@ -308,6 +342,7 @@ def _build_log_doc(
         ],
         "progress_log": "\n".join(progress_log_lines),
         "token_usage": token_usage,
+        "groundedness": groundedness or {},
     }
 
 

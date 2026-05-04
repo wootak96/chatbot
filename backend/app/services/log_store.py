@@ -90,6 +90,23 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                 },
             },
             "progress_log": {"type": "text"},
+            "groundedness": {
+                "properties": {
+                    "grounded": {"type": "boolean"},
+                    "score": {"type": "float"},
+                    "supported_count": {"type": "integer"},
+                    "total_claims": {"type": "integer"},
+                    "claims": {
+                        "type": "object",
+                        "properties": {
+                            "claim": {"type": "text"},
+                            "citations": {"type": "integer"},
+                            "supported": {"type": "boolean"},
+                            "reason": {"type": "text"},
+                        },
+                    },
+                }
+            },
             "token_usage": {
                 "properties": {
                     "total_input": {"type": "integer"},

@@ -661,3 +661,66 @@ async def test_debug_explain_uses_recent_turns_in_prompt(
     assert "Kafka 토픽 파티션 동작?" in sent_prompt
     assert "kafka_docs" in sent_prompt
     assert "kafka 자료 충분" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_groundedness_check_returns_empty_when_no_citations(stub_judge):
+    """No citations in answer (chitchat / general / 정보 없음) → skip check."""
+    from app.graph.post_check import run_groundedness_check
+
+    stub = stub_judge([])  # never called
+    result = await run_groundedness_check(
+        answer="안녕하세요!",
+        candidates=[{"id": "1", "title": "x", "content": "y"}],
+        cited_indices=set(),
+    )
+    assert result == {}
+    assert stub.calls == []
+
+
+@pytest.mark.asyncio
+async def test_groundedness_check_aggregates_per_claim(stub_judge):
+    """Verdict + score derived from per-claim supported flags."""
+    from app.graph.post_check import run_groundedness_check
+
+    stub_judge(
+        [
+            '{"grounded": false, "score": 0.5, "claims": ['
+            '{"claim": "A", "citations": [1], "supported": true, "reason": "ok"},'
+            '{"claim": "B", "citations": [2], "supported": false, "reason": "missing"}'
+            "]}"
+        ]
+    )
+    result = await run_groundedness_check(
+        answer="...A [1] ... B [2]",
+        candidates=[
+            {"id": "1", "title": "Doc A", "content": "A is true"},
+            {"id": "2", "title": "Doc B", "content": "C is true"},
+        ],
+        cited_indices={1, 2},
+    )
+    assert result["total_claims"] == 2
+    assert result["supported_count"] == 1
+    assert result["score"] == 0.5
+    assert result["grounded"] is False
+    assert len(result["claims"]) == 2
+
+
+def test_groundedness_progress_renders_unsupported_claims():
+    from app.graph.post_check import format_groundedness_progress
+
+    msg = format_groundedness_progress(
+        {
+            "grounded": False,
+            "score": 0.5,
+            "supported_count": 1,
+            "total_claims": 2,
+            "claims": [
+                {"claim": "A", "citations": [1], "supported": True, "reason": "ok"},
+                {"claim": "B claim", "citations": [2], "supported": False, "reason": "no source"},
+            ],
+        }
+    )
+    assert "1/2" in msg
+    assert "B claim" in msg
+    assert "no source" in msg
