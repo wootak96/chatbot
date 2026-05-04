@@ -90,6 +90,24 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                 },
             },
             "progress_log": {"type": "text"},
+            "token_usage": {
+                "properties": {
+                    "total_input": {"type": "integer"},
+                    "total_output": {"type": "integer"},
+                    "total_tokens": {"type": "integer"},
+                    "llm_calls": {"type": "integer"},
+                    "by_node": {
+                        "type": "object",
+                        "properties": {
+                            "node": {"type": "keyword"},
+                            "input": {"type": "integer"},
+                            "output": {"type": "integer"},
+                            "total": {"type": "integer"},
+                            "calls": {"type": "integer"},
+                        },
+                    },
+                }
+            },
         }
     }
 }

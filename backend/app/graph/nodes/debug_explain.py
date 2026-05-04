@@ -89,6 +89,20 @@ def _render_turns(turns: list[dict]) -> str:
                 lines.append(f"  {mark} [{j}] {title} (score={score:.3f})")
         if sufficient is not None:
             lines.append(f"sufficient: {sufficient} | reason: {reason}")
+        token_usage = t.get("token_usage") or {}
+        if token_usage:
+            lines.append(
+                f"token_usage: in={token_usage.get('total_input', 0)} "
+                f"out={token_usage.get('total_output', 0)} "
+                f"total={token_usage.get('total_tokens', 0)} "
+                f"({token_usage.get('llm_calls', 0)} LLM 호출)"
+            )
+            for n in token_usage.get("by_node") or []:
+                lines.append(
+                    f"  - {n.get('node', '')}: "
+                    f"in={n.get('input', 0)} out={n.get('output', 0)} "
+                    f"total={n.get('total', 0)} (calls={n.get('calls', 0)})"
+                )
         if sources:
             lines.append("sources:")
             for s in sources:

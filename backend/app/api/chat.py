@@ -70,6 +70,9 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     # flushed to `{user_id}_logs` after the response is fully streamed out.
     progress_log_lines: list[str] = []
     streamed_answer_buf: list[str] = []
+    # Per-node token usage. Populated from `on_chat_model_end` events emitted
+    # by every LLM call in the graph (judge nodes + streaming generator).
+    token_usage_by_node: dict[str, dict[str, int]] = {}
 
     async for event in workflow.astream_events(state, version="v2"):
         kind = event.get("event")
@@ -89,6 +92,18 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     if k == PROGRESS_KEY:
                         continue
                     final_state[k] = v
+
+        elif kind == "on_chat_model_end":
+            usage = _extract_usage(event.get("data", {}).get("output"))
+            if usage:
+                bucket = token_usage_by_node.setdefault(
+                    node_name or "unknown",
+                    {"input": 0, "output": 0, "total": 0, "calls": 0},
+                )
+                bucket["input"] += usage["input"]
+                bucket["output"] += usage["output"]
+                bucket["total"] += usage["total"]
+                bucket["calls"] += 1
 
         elif kind == "on_chat_model_stream" and node_name in (
             "generate",
@@ -188,7 +203,16 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     intent = final_state.get("intent") or ""
     if user_id and intent != "debugging":
         try:
-            await save_turn(user_id, _build_log_doc(request, final_state, progress_log_lines, streamed_answer_buf))
+            await save_turn(
+                user_id,
+                _build_log_doc(
+                    request,
+                    final_state,
+                    progress_log_lines,
+                    streamed_answer_buf,
+                    token_usage_by_node,
+                ),
+            )
         except Exception as e:  # belt-and-braces — save_turn already swallows
             logger.warning("Chat-turn log save failed: %s", e)
 
@@ -198,6 +222,7 @@ def _build_log_doc(
     final_state: dict[str, Any],
     progress_log_lines: list[str],
     streamed_answer_buf: list[str],
+    token_usage_by_node: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Flatten the final RAGState into the `{user_id}_logs` document shape."""
     last_user = next(
@@ -215,6 +240,26 @@ def _build_log_doc(
     plans = final_state.get("search_plans") or []
     candidates = final_state.get("candidates") or []
     cited_indices = _extract_cited_indices(final_answer)
+    by_node = token_usage_by_node or {}
+    total_in = sum(b.get("input", 0) for b in by_node.values())
+    total_out = sum(b.get("output", 0) for b in by_node.values())
+    total_calls = sum(b.get("calls", 0) for b in by_node.values())
+    token_usage = {
+        "total_input": total_in,
+        "total_output": total_out,
+        "total_tokens": total_in + total_out,
+        "llm_calls": total_calls,
+        "by_node": [
+            {
+                "node": node,
+                "input": v.get("input", 0),
+                "output": v.get("output", 0),
+                "total": v.get("total", 0),
+                "calls": v.get("calls", 0),
+            }
+            for node, v in sorted(by_node.items())
+        ],
+    }
     return {
         "question": user_question,
         "resolved_query": final_state.get("resolved_query") or "",
@@ -252,10 +297,38 @@ def _build_log_doc(
             for s in (final_state.get("sources") or [])
         ],
         "progress_log": "\n".join(progress_log_lines),
+        "token_usage": token_usage,
     }
 
 
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+
+
+def _extract_usage(output: Any) -> dict[str, int] | None:
+    """Pull token usage off an LLM response. Tolerates the multiple shapes
+    LangChain emits: AIMessage.usage_metadata, response_metadata.token_usage,
+    or a dict-shaped output. Returns None when no usage is available (e.g.,
+    streaming responses that didn't enable include_usage)."""
+    if output is None:
+        return None
+    meta = getattr(output, "usage_metadata", None)
+    if not meta and isinstance(output, dict):
+        meta = output.get("usage_metadata")
+    if meta:
+        return {
+            "input": int(meta.get("input_tokens", 0) or 0),
+            "output": int(meta.get("output_tokens", 0) or 0),
+            "total": int(meta.get("total_tokens", 0) or 0),
+        }
+    rmeta = getattr(output, "response_metadata", None) or {}
+    if isinstance(output, dict):
+        rmeta = output.get("response_metadata") or rmeta
+    tu = (rmeta or {}).get("token_usage") or {}
+    if tu:
+        in_ = int(tu.get("prompt_tokens", 0) or 0)
+        out_ = int(tu.get("completion_tokens", 0) or 0)
+        return {"input": in_, "output": out_, "total": in_ + out_}
+    return None
 
 
 def _extract_cited_indices(answer: str) -> set[int]:
