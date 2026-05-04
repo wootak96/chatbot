@@ -173,6 +173,16 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                 fallback, model=request.model, completion_id=completion_id
             )
 
+    # Now that we have the full answer, list which docs were actually cited as
+    # `[N]`. self_check no longer emits per-doc ✓/✗ (it can't — runs before
+    # generate); this post-stream chunk gives the UI accurate citation marks.
+    cited_msg = _format_cited_docs(final_state, streamed_answer_buf)
+    if cited_msg:
+        progress_log_lines.append(cited_msg)
+        yield sse.text_chunk(
+            cited_msg + "\n", model=request.model, completion_id=completion_id
+        )
+
     # Emit a hidden CITES marker so the frontend can wrap inline [N] tokens in
     # the answer with clickable links to the corresponding source URL. We drop
     # the verbose **출처** block to save tokens — only N→url is needed since
@@ -301,7 +311,10 @@ def _build_log_doc(
     }
 
 
-_CITATION_RE = re.compile(r"\[(\d+)\]")
+# Match bracket groups containing one or more digit-runs separated by commas:
+# `[1]`, `[1, 2]`, `[1,2,3]`, `[ 1 , 2 ]`. Plain-text brackets like `[note]`
+# are skipped because the inner alphabet is digits + comma + whitespace only.
+_CITATION_RE = re.compile(r"\[([\d,\s]+)\]")
 
 
 def _extract_usage(output: Any) -> dict[str, int] | None:
@@ -331,6 +344,40 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
     return None
 
 
+def _format_cited_docs(
+    final_state: dict[str, Any], streamed_answer_buf: list[str]
+) -> str:
+    """Build the post-stream `📚 답변 인용 문서` progress block, listing only
+    candidates whose 1-based index appears as `[N]` in the answer body.
+
+    Returns an empty string when there are no candidates or no citations
+    (chitchat / general / debugging / not-found responses)."""
+    candidates = final_state.get("candidates") or []
+    if not candidates:
+        return ""
+    answer_text = "".join(streamed_answer_buf) or final_state.get("final_answer", "")
+    cited = _extract_cited_indices(answer_text)
+    if not cited:
+        return ""
+    seen_keys: set[str] = set()
+    lines: list[str] = ["📚 답변 인용 문서"]
+    for i, d in enumerate(candidates, 1):
+        if i not in cited:
+            continue
+        label = (
+            d.get("title") or d.get("url") or d.get("id") or "(제목 없음)"
+        )
+        key = (d.get("title") or d.get("url") or d.get("id") or "").strip()
+        if key and key in seen_keys:
+            continue
+        if key:
+            seen_keys.add(key)
+        lines.append(f"  ✓ {label}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _extract_cited_indices(answer: str) -> set[int]:
     """Pull 1-based [N] citation numbers out of the generated answer.
 
@@ -340,7 +387,11 @@ def _extract_cited_indices(answer: str) -> set[int]:
     debugging answers (which have no candidates anyway)."""
     if not answer:
         return set()
-    return {int(m) for m in _CITATION_RE.findall(answer)}
+    out: set[int] = set()
+    for group in _CITATION_RE.findall(answer):
+        for n in re.findall(r"\d+", group):
+            out.add(int(n))
+    return out
 
 
 _NODE_NAMES = {
