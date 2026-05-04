@@ -82,6 +82,61 @@ CHAT_HTML = """<!doctype html>
   }
   header button:hover { background: rgba(0,122,255,0.08); }
   header button:active { background: rgba(0,122,255,0.16); }
+  /* App body — sidebar (sessions) + chat column */
+  .app {
+    flex: 1; display: flex; min-height: 0;
+  }
+  .sidebar {
+    width: 260px; min-width: 260px;
+    background: var(--panel-solid);
+    border-right: 0.5px solid var(--separator);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-head {
+    padding: 12px 14px;
+    border-bottom: 0.5px solid var(--separator);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+  }
+  .sidebar-head .label {
+    font-size: 12px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .sidebar-head button.new-chat {
+    background: var(--accent); color: white; border: none;
+    font: inherit; font-size: 13px; font-weight: 600;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .sidebar-head button.new-chat:hover { background: var(--accent-pressed); }
+  .session-list {
+    list-style: none; margin: 0; padding: 6px 8px;
+    overflow-y: auto; flex: 1;
+  }
+  .session-list .empty-msg {
+    color: var(--muted); font-size: 13px; padding: 10px 8px;
+    text-align: center;
+  }
+  .session-list li {
+    padding: 9px 12px; border-radius: 10px;
+    margin-bottom: 2px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 2px;
+    transition: background 0.08s ease;
+  }
+  .session-list li:hover { background: var(--field); }
+  .session-list li.active { background: rgba(0,122,255,0.10); }
+  .session-list li.active .session-title { color: var(--accent); font-weight: 600; }
+  .session-list .session-title {
+    font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-list .session-meta {
+    font-size: 11px; color: var(--muted);
+  }
+  .chat-column {
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
   main {
     flex: 1; overflow-y: auto; padding: 16px 14px 24px;
     display: flex; flex-direction: column; gap: 4px;
@@ -242,6 +297,9 @@ CHAT_HTML = """<!doctype html>
   }
 
   /* Mobile tweaks */
+  @media (max-width: 760px) {
+    .sidebar { width: 220px; min-width: 220px; }
+  }
   @media (max-width: 520px) {
     header { padding: 10px 12px; gap: 8px; }
     header h1 { font-size: 16px; }
@@ -249,6 +307,7 @@ CHAT_HTML = """<!doctype html>
     header .meta { display: none; }
     main { padding: 12px 10px 18px; }
     .msg { max-width: 86%; }
+    .sidebar { display: none; }
   }
 </style>
 </head>
@@ -275,15 +334,28 @@ CHAT_HTML = """<!doctype html>
     <button id="clear">대화 초기화</button>
     <button id="logout">로그아웃</button>
   </header>
-  <main id="chat" style="display:none;">
-    <div class="empty" id="empty"></div>
-  </main>
-  <footer id="chat-footer" style="display:none;">
-    <div class="input-wrap">
-      <textarea id="input" rows="1" placeholder="질문을 입력하세요" aria-label="질문 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
-      <button class="send" id="send" aria-label="전송"></button>
+  <div class="app" id="app-body" style="display:none;">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="label">대화 목록</span>
+        <button class="new-chat" id="new-chat-btn">+ 새 대화</button>
+      </div>
+      <ul class="session-list" id="session-list">
+        <li class="empty-msg">로딩 중...</li>
+      </ul>
+    </aside>
+    <div class="chat-column">
+      <main id="chat">
+        <div class="empty" id="empty"></div>
+      </main>
+      <footer id="chat-footer">
+        <div class="input-wrap">
+          <textarea id="input" rows="1" placeholder="질문을 입력하세요" aria-label="질문 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+          <button class="send" id="send" aria-label="전송"></button>
+        </div>
+      </footer>
     </div>
-  </footer>
+  </div>
 
 <script>
 (function() {
@@ -293,8 +365,10 @@ CHAT_HTML = """<!doctype html>
 
   const loginScreen = document.getElementById('login-screen');
   const chatHeader = document.getElementById('chat-header');
-  const chatFooter = document.getElementById('chat-footer');
+  const appBody = document.getElementById('app-body');
   const chatMain = document.getElementById('chat');
+  const sessionListEl = document.getElementById('session-list');
+  const newChatBtn = document.getElementById('new-chat-btn');
 
   if (!userId) {
     loginScreen.style.display = 'flex';
@@ -324,8 +398,7 @@ CHAT_HTML = """<!doctype html>
 
   // Show chat UI now that we have a user_id.
   chatHeader.style.display = '';
-  chatFooter.style.display = '';
-  chatMain.style.display = '';
+  appBody.style.display = '';
 
   const chat = chatMain;
   const empty = document.getElementById('empty');
@@ -336,17 +409,10 @@ CHAT_HTML = """<!doctype html>
   const userPill = document.getElementById('user-pill');
   userPill.textContent = '👤 ' + userId;
 
-  // Per-user message storage so different ids don't collide.
-  const STORAGE_KEY = 'rag-chat:messages:v2:' + userId;
-  // Per-conversation session id (UUID). Reset on "대화 초기화" so debug-mode
-  // questions only see turns from the current thread. Persists across reload.
+  // Per-(user, session) message cache. Each session has its own key so
+  // switching sessions doesn't blow away another's history.
   const SESSION_KEY = 'rag-chat:session:v1:' + userId;
-
-  let messages = [];  // [{role, content}]
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) messages = JSON.parse(saved);
-  } catch (e) { messages = []; }
+  function messagesKey(sid) { return 'rag-chat:messages:v3:' + userId + ':' + sid; }
 
   function newSessionId() {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -363,6 +429,15 @@ CHAT_HTML = """<!doctype html>
     try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
   }
 
+  let messages = [];  // [{role, content}]
+  function loadMessagesFromCache() {
+    try {
+      const saved = localStorage.getItem(messagesKey(sessionId));
+      messages = saved ? JSON.parse(saved) : [];
+    } catch (e) { messages = []; }
+  }
+  loadMessagesFromCache();
+
   function autosize() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
@@ -376,13 +451,12 @@ CHAT_HTML = """<!doctype html>
   });
   sendBtn.addEventListener('click', send);
   clearBtn.addEventListener('click', () => {
-    if (messages.length && !confirm('대화를 모두 지울까요?')) return;
-    messages = [];
-    localStorage.removeItem(STORAGE_KEY);
-    // Start a new session — debug-mode follow-ups won't pull from prior thread.
-    sessionId = newSessionId();
-    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
-    rerenderHistory();
+    if (messages.length && !confirm('현재 대화를 비우고 새 대화를 시작할까요?')) return;
+    startNewSession();
+  });
+  newChatBtn.addEventListener('click', () => {
+    if (messages.length && !confirm('현재 대화를 비우고 새 대화를 시작할까요?')) return;
+    startNewSession();
   });
   logoutBtn.addEventListener('click', () => {
     if (!confirm('로그아웃 할까요? 현재 대화 기록은 다음 로그인 시 그대로 보입니다.')) return;
@@ -392,7 +466,98 @@ CHAT_HTML = """<!doctype html>
   });
 
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(messages)); } catch (e) {}
+    try { localStorage.setItem(messagesKey(sessionId), JSON.stringify(messages)); } catch (e) {}
+  }
+
+  // ── Sessions sidebar ──
+  async function fetchSessions() {
+    try {
+      const r = await fetch('/v1/sessions?user_id=' + encodeURIComponent(userId));
+      if (!r.ok) return [];
+      const data = await r.json();
+      return data.sessions || [];
+    } catch (e) { return []; }
+  }
+  async function fetchSessionMessages(sid) {
+    try {
+      const r = await fetch(
+        '/v1/sessions/' + encodeURIComponent(sid) + '/messages?user_id=' + encodeURIComponent(userId)
+      );
+      if (!r.ok) return [];
+      const data = await r.json();
+      return data.messages || [];
+    } catch (e) { return []; }
+  }
+  function renderSessionList(sessions) {
+    sessionListEl.innerHTML = '';
+    // Always show the current session at the top, even if it has no logged
+    // turns yet (so the user sees their active thread highlighted).
+    const seen = new Set();
+    const items = [];
+    if (sessionId) {
+      const cur = sessions.find(s => s.session_id === sessionId);
+      if (cur) {
+        items.push(cur); seen.add(sessionId);
+      } else {
+        items.push({ session_id: sessionId, title: '(새 대화)', turn_count: 0 });
+        seen.add(sessionId);
+      }
+    }
+    for (const s of sessions) {
+      if (!seen.has(s.session_id)) items.push(s);
+    }
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'empty-msg';
+      li.textContent = '아직 대화가 없습니다.';
+      sessionListEl.appendChild(li);
+      return;
+    }
+    for (const s of items) {
+      const li = document.createElement('li');
+      if (s.session_id === sessionId) li.classList.add('active');
+      const title = document.createElement('div');
+      title.className = 'session-title';
+      title.textContent = s.title || '(제목 없음)';
+      li.appendChild(title);
+      if (s.turn_count) {
+        const meta = document.createElement('div');
+        meta.className = 'session-meta';
+        meta.textContent = s.turn_count + '턴';
+        li.appendChild(meta);
+      }
+      li.addEventListener('click', () => switchSession(s.session_id));
+      sessionListEl.appendChild(li);
+    }
+  }
+  async function refreshSessionList() {
+    const sessions = await fetchSessions();
+    renderSessionList(sessions);
+  }
+  async function switchSession(sid) {
+    if (sid === sessionId) return;
+    sessionId = sid;
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
+    // Try local cache first, then fall back to server-stored history so
+    // the user can resume a session from another device / browser.
+    loadMessagesFromCache();
+    if (!messages.length) {
+      const serverMsgs = await fetchSessionMessages(sid);
+      if (serverMsgs.length) {
+        messages = serverMsgs;
+        persist();
+      }
+    }
+    rerenderHistory();
+    refreshSessionList();
+  }
+  function startNewSession() {
+    sessionId = newSessionId();
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
+    messages = [];
+    persist();
+    rerenderHistory();
+    refreshSessionList();
   }
   // The intro message is rendered as a persistent assistant bubble at the top
   // of every chat. It is NOT added to `messages` (so it never gets sent to the
@@ -586,6 +751,7 @@ CHAT_HTML = """<!doctype html>
 
   rerenderHistory();
   chat.scrollTop = chat.scrollHeight;
+  refreshSessionList();
 
   async function send() {
     const text = input.value.trim();
@@ -648,6 +814,9 @@ CHAT_HTML = """<!doctype html>
       }
       messages.push({ role: 'assistant', content: live.finalText() });
       persist();
+      // Pick up the freshly logged turn — title appears for new sessions,
+      // turn count increments for existing ones.
+      refreshSessionList();
     } catch (e) {
       live.body.innerHTML = '<span class="err">네트워크 오류: ' + escapeHtml(String(e)) + '</span>';
     } finally {
