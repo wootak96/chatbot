@@ -43,6 +43,8 @@ def _render_turns(turns: list[dict]) -> str:
         search_intent = t.get("search_intent") or ""
         sub_queries = t.get("sub_queries") or []
         target_indices = t.get("target_indices") or []
+        index_routing = t.get("index_routing") or []
+        metadata_filters = t.get("metadata_filters") or {}
         plans = t.get("search_plans") or []
         sufficient = t.get("sufficient")
         reason = t.get("sufficiency_reason") or ""
@@ -57,8 +59,16 @@ def _render_turns(turns: list[dict]) -> str:
         ]
         if sub_queries:
             lines.append(f"sub_queries: {sub_queries}")
-        if target_indices:
+        if index_routing:
+            lines.append("index_routing (sub_query별 라우팅):")
+            for r in index_routing:
+                lines.append(
+                    f"  - sub_query={r.get('sub_query', '')!r} → {r.get('indices', [])}"
+                )
+        elif target_indices:
             lines.append(f"target_indices: {target_indices}")
+        if metadata_filters:
+            lines.append(f"metadata_filters (키워드 추출): {metadata_filters}")
         if plans:
             lines.append("search_plans:")
             for p in plans:

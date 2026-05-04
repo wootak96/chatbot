@@ -38,6 +38,27 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
             "search_intent": {"type": "keyword"},
             "sub_queries": {"type": "keyword"},
             "target_indices": {"type": "keyword"},
+            "index_routing": {
+                "type": "object",
+                "properties": {
+                    "sub_query": {"type": "keyword"},
+                    "indices": {"type": "keyword"},
+                },
+            },
+            "metadata_filters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "keyword"},
+                    "category": {"type": "keyword"},
+                    "date_range": {
+                        "type": "object",
+                        "properties": {
+                            "gte": {"type": "keyword"},
+                            "lte": {"type": "keyword"},
+                        },
+                    },
+                },
+            },
             "search_plans": {
                 "type": "object",
                 "properties": {

@@ -204,13 +204,13 @@ def _build_log_doc(
     )
     user_question = last_user.content if last_user else ""
     final_answer = final_state.get("final_answer") or "".join(streamed_answer_buf)
-    target_indices = sorted(
-        {
-            idx
-            for indices in (final_state.get("target_indices_per_query") or [])
-            for idx in indices
-        }
-    )
+    sub_queries = final_state.get("sub_queries") or []
+    routing_per_query = final_state.get("target_indices_per_query") or []
+    target_indices = sorted({idx for indices in routing_per_query for idx in indices})
+    index_routing = [
+        {"sub_query": sq, "indices": list(idxs)}
+        for sq, idxs in zip(sub_queries, routing_per_query)
+    ]
     plans = final_state.get("search_plans") or []
     candidates = final_state.get("candidates") or []
     return {
@@ -218,8 +218,10 @@ def _build_log_doc(
         "resolved_query": final_state.get("resolved_query") or "",
         "intent": final_state.get("intent") or "",
         "search_intent": final_state.get("search_intent") or "",
-        "sub_queries": final_state.get("sub_queries") or [],
+        "sub_queries": sub_queries,
         "target_indices": target_indices,
+        "index_routing": index_routing,
+        "metadata_filters": final_state.get("metadata_filters") or {},
         "search_plans": [
             {
                 "sub_query": p.get("sub_query", ""),
