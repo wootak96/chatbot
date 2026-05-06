@@ -147,3 +147,46 @@ async def get_session_messages(
         if a:
             messages.append({"role": "assistant", "content": a})
     return {"messages": messages}
+
+
+@router.delete("/v1/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    user_id: str = Query(..., min_length=1),
+) -> dict:
+    """Delete every chat_logs document for (user_id, session_id).
+
+    Spoofing guard: the same (user_id, session_id) filter is applied that
+    `save_turn` writes with, so a user can never delete another user's
+    session by guessing its id. Idempotent — returns deleted=0 when the
+    session doesn't exist or the index isn't created yet."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    name = chat_logs_index_name()
+    if not name:
+        return {"deleted": 0}
+    es = get_es_client()
+    try:
+        exists = await es.indices.exists(index=name)
+        if not exists:
+            return {"deleted": 0}
+        body = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"user_id": user_id}},
+                        {"term": {"session_id": session_id}},
+                    ]
+                }
+            }
+        }
+        r = await es.delete_by_query(
+            index=name, body=body, refresh=True, conflicts="proceed"
+        )
+    except Exception as e:
+        logger.warning(
+            "delete_session(%s, %s) failed: %s", user_id, session_id, e
+        )
+        raise HTTPException(status_code=500, detail="delete failed") from e
+
+    return {"deleted": int(r.get("deleted", 0) or 0)}

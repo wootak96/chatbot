@@ -120,18 +120,37 @@ CHAT_HTML = """<!doctype html>
   .session-list li {
     padding: 9px 12px; border-radius: 10px;
     margin-bottom: 2px; cursor: pointer;
-    display: flex; flex-direction: column; gap: 2px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    grid-template-areas: "title delete" "meta delete";
+    column-gap: 6px;
+    align-items: center;
     transition: background 0.08s ease;
   }
   .session-list li:hover { background: var(--field); }
+  .session-list li:hover .delete-session { opacity: 1; }
   .session-list li.active { background: rgba(0,122,255,0.10); }
   .session-list li.active .session-title { color: var(--accent); font-weight: 600; }
   .session-list .session-title {
+    grid-area: title;
     font-size: 13px; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .session-list .session-meta {
+    grid-area: meta;
     font-size: 11px; color: var(--muted);
+  }
+  .session-list .delete-session {
+    grid-area: delete;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-size: 16px; line-height: 1;
+    padding: 4px 6px; border-radius: 6px;
+    opacity: 0; transition: opacity 0.08s ease, background 0.08s ease, color 0.08s ease;
+  }
+  .session-list li.active .delete-session { opacity: 0.7; }
+  .session-list .delete-session:hover {
+    background: rgba(255,59,48,0.12); color: #e55; opacity: 1;
   }
   .chat-column {
     flex: 1; display: flex; flex-direction: column;
@@ -526,8 +545,44 @@ CHAT_HTML = """<!doctype html>
         meta.textContent = s.turn_count + '턴';
         li.appendChild(meta);
       }
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'delete-session';
+      delBtn.title = '이 세션 삭제';
+      delBtn.setAttribute('aria-label', '세션 삭제');
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();  // don't switch into the session we're deleting
+        deleteSession(s.session_id, s.title || '(제목 없음)');
+      });
+      li.appendChild(delBtn);
       li.addEventListener('click', () => switchSession(s.session_id));
       sessionListEl.appendChild(li);
+    }
+  }
+  async function deleteSession(sid, label) {
+    if (!confirm('"' + label + '" 세션을 삭제할까요? 로그도 함께 지워집니다.')) return;
+    try {
+      const r = await fetch(
+        '/v1/sessions/' + encodeURIComponent(sid) + '?user_id=' + encodeURIComponent(userId),
+        { method: 'DELETE' }
+      );
+      if (!r.ok) {
+        alert('삭제 실패: ' + (await r.text()));
+        return;
+      }
+    } catch (e) {
+      alert('삭제 중 오류: ' + e);
+      return;
+    }
+    // Drop the local message cache for the deleted session.
+    try { localStorage.removeItem(messagesKey(sid)); } catch (e) {}
+    if (sid === sessionId) {
+      // The active session was deleted — start a fresh one so the chat
+      // column is never pointing at a vanished thread.
+      startNewSession();
+    } else {
+      refreshSessionList();
     }
   }
   async function refreshSessionList() {

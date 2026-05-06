@@ -21,14 +21,29 @@ class FakeIndices:
 
 
 class FakeES:
-    def __init__(self, response: dict, exists: bool = True):
+    def __init__(
+        self,
+        response: dict,
+        exists: bool = True,
+        delete_response: dict | None = None,
+        delete_raises: Exception | None = None,
+    ):
         self.indices = FakeIndices(exists_value=exists)
         self.search_calls: list[dict] = []
+        self.delete_calls: list[dict] = []
         self._response = response
+        self._delete_response = delete_response or {"deleted": 0}
+        self._delete_raises = delete_raises
 
     async def search(self, *, index: str, body):
         self.search_calls.append({"index": index, "body": body})
         return self._response
+
+    async def delete_by_query(self, *, index: str, body, **kwargs):
+        self.delete_calls.append({"index": index, "body": body, "kwargs": kwargs})
+        if self._delete_raises:
+            raise self._delete_raises
+        return self._delete_response
 
 
 @pytest.fixture
@@ -36,8 +51,19 @@ def app_with_fake_es(monkeypatch):
     """Returns a function `install(response_for_each_call: dict)` that swaps
     `get_es_client` with a FakeES yielding the given response."""
 
-    def _install(response: dict, *, exists: bool = True) -> FakeES:
-        fake = FakeES(response=response, exists=exists)
+    def _install(
+        response: dict,
+        *,
+        exists: bool = True,
+        delete_response: dict | None = None,
+        delete_raises: Exception | None = None,
+    ) -> FakeES:
+        fake = FakeES(
+            response=response,
+            exists=exists,
+            delete_response=delete_response,
+            delete_raises=delete_raises,
+        )
         from app.api import sessions as sessions_mod
 
         monkeypatch.setattr(sessions_mod, "get_es_client", lambda: fake)
@@ -153,3 +179,37 @@ def test_get_session_messages_empty_when_index_missing(app_with_fake_es):
     r = _client().get("/v1/sessions/sess-x/messages?user_id=alice")
     assert r.status_code == 200
     assert r.json() == {"messages": []}
+
+
+def test_delete_session_runs_delete_by_query_with_user_and_session(
+    app_with_fake_es,
+):
+    fake = app_with_fake_es({}, delete_response={"deleted": 3})
+    r = _client().delete("/v1/sessions/sess-1?user_id=alice")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 3}
+    assert len(fake.delete_calls) == 1
+    flt = fake.delete_calls[0]["body"]["query"]["bool"]["filter"]
+    # Both filters present so a user can never delete another user's session.
+    assert {"term": {"user_id": "alice"}} in flt
+    assert {"term": {"session_id": "sess-1"}} in flt
+    assert fake.delete_calls[0]["kwargs"].get("refresh") is True
+
+
+def test_delete_session_returns_zero_when_index_missing(app_with_fake_es):
+    fake = app_with_fake_es({}, exists=False)
+    r = _client().delete("/v1/sessions/sess-x?user_id=alice")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 0}
+    assert fake.delete_calls == []  # nothing to delete
+
+
+def test_delete_session_requires_user_id():
+    r = _client().delete("/v1/sessions/sess-1")
+    assert r.status_code == 422
+
+
+def test_delete_session_returns_500_on_es_error(app_with_fake_es):
+    app_with_fake_es({}, delete_raises=RuntimeError("boom"))
+    r = _client().delete("/v1/sessions/sess-1?user_id=alice")
+    assert r.status_code == 500
