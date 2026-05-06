@@ -418,35 +418,13 @@ async def test_workflow_debugging_path_replays_logs(
 
 
 @pytest.mark.asyncio
-async def test_workflow_search_intent_list_no_title_field(stub_judge, monkeypatch):
-    """list search_intent gracefully degrades when title field is unmapped."""
-    stub_judge(
-        [
-            '{"intent": "question", "resolved_query": "어떤 문서 있어?"}',
-            '{"search_intent": "list"}',
-        ]
-    )
+async def test_search_intent_list_is_disabled(stub_judge):
+    """`list` is currently disabled — even when the judge returns it, the node
+    must coerce search_intent back to `lookup` so es_list never runs."""
+    from app.graph.nodes.search_intent import search_intent
 
-    # Force the degraded code path regardless of what .env / ES_FIELD_TITLE
-    # is set to in the test host. This is exactly the scenario where the
-    # index has no title field mapped.
-    from app import config as app_config
-
-    def _no_title_settings() -> app_config.Settings:
-        s = app_config.Settings()
-        return s.model_copy(update={"es_field_title": ""})
-
-    monkeypatch.setattr(app_config, "get_settings", _no_title_settings)
-    # es_list imports get_settings at call time via `from app.config import get_settings`
-    # so we must patch the symbol there too.
-    from app.graph.nodes import es_list as es_list_mod
-
-    monkeypatch.setattr(es_list_mod, "get_settings", _no_title_settings)
-
-    workflow = build_workflow()
+    stub_judge(['{"search_intent": "list"}'])
     state = initial_state([{"role": "user", "content": "어떤 문서 있어?"}])
-    final = await workflow.ainvoke(state)
-
-    assert final["search_intent"] == "list"
-    assert "title" in final["final_answer"]
-    assert final["sources"] == []
+    state["resolved_query"] = "어떤 문서 있어?"
+    out = await search_intent(state)
+    assert out["search_intent"] == "lookup"

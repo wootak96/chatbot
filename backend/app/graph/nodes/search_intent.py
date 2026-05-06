@@ -25,6 +25,11 @@ _LABEL = {
     "list": "문서 목록 조회",
 }
 
+# `list` is temporarily disabled — title.keyword aggregation produced
+# misleading results on the current corpus. The node, prompt, and graph
+# wiring stay intact so we can re-enable by flipping this flag.
+_DISABLED_INTENTS = {"list"}
+
 
 async def search_intent(state: RAGState) -> dict:
     query = state.get("resolved_query") or state.get("current_query") or ""
@@ -36,7 +41,7 @@ async def search_intent(state: RAGState) -> dict:
         prompts.SEARCH_INTENT_CLASSIFY.format(query=query),
     )
     si = (data.get("search_intent") or "lookup").strip().lower()
-    if si not in _VALID:
+    if si not in _VALID or si in _DISABLED_INTENTS:
         si = "lookup"
 
     return {
