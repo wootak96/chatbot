@@ -2,11 +2,12 @@
 
 Flow:
   START
-   -> query_analyze (intent classifier: question / chitchat / general / debugging)
-        chitchat?   -> generate (greeting reply) -> END
-        general?    -> general_chat -> END
-        debugging?  -> debug_explain (replay {user_id}_logs trace) -> END
-        question?   -> query_reform (history-aware self-contained rewrite)
+   -> query_analyze (intent classifier: question / chitchat / general / debugging / instruction)
+        chitchat?    -> generate (greeting reply) -> END
+        general?     -> general_chat -> END
+        debugging?   -> debug_explain (replay chat_logs trace) -> END
+        instruction? -> instruction_save (update user's chat_md doc) -> END
+        question?    -> query_reform (history-aware self-contained rewrite)
    -> search_intent (lookup / count / list)
         count?     -> es_count -> END
         list?      -> es_list  -> END
@@ -41,6 +42,7 @@ from app.graph.nodes.general_chat import general_chat
 from app.graph.nodes.generate import generate
 from app.graph.nodes.hybrid_retrieve import hybrid_retrieve
 from app.graph.nodes.index_route import index_route
+from app.graph.nodes.instruction_save import instruction_save
 from app.graph.nodes.metadata_extract import metadata_extract
 from app.graph.nodes.query_analyze import query_analyze
 from app.graph.nodes.query_decompose import query_decompose
@@ -60,6 +62,8 @@ def _branch_from_analyze(state: RAGState) -> str:
         return "general"
     if intent == "debugging":
         return "debugging"
+    if intent == "instruction":
+        return "instruction"
     return "search"
 
 
@@ -90,6 +94,7 @@ def build_workflow():
     builder.add_node("generate", generate)
     builder.add_node("general_chat", general_chat)
     builder.add_node("debug_explain", debug_explain)
+    builder.add_node("instruction_save", instruction_save)
 
     builder.add_edge(START, "query_analyze")
     builder.add_conditional_edges(
@@ -99,6 +104,7 @@ def build_workflow():
             "chitchat": "generate",
             "general": "general_chat",
             "debugging": "debug_explain",
+            "instruction": "instruction_save",
             "search": "query_reform",
         },
     )
@@ -132,6 +138,7 @@ def build_workflow():
     builder.add_edge("generate", END)
     builder.add_edge("general_chat", END)
     builder.add_edge("debug_explain", END)
+    builder.add_edge("instruction_save", END)
 
     return builder.compile()
 

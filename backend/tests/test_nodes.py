@@ -749,3 +749,163 @@ def test_groundedness_progress_renders_unsupported_claims():
     assert "1/2" in msg
     assert "B claim" in msg
     assert "no source" in msg
+
+
+# ---- query_analyze: instruction intent ----
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_instruction_intent(stub_judge):
+    """Style/tone directives reach the instruction branch, not search."""
+    stub_judge(['{"intent": "instruction"}'])
+    state = {"current_query": "앞으로 답변은 마크다운으로 해줘", "messages": []}
+    out = await query_analyze(state)
+    assert out["intent"] == "instruction"
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_instruction_with_domain_word_preserved(stub_judge):
+    """Override 2 only forces `question` for chitchat/general — instruction
+    must survive even when the directive mentions Kafka/ES."""
+    stub_judge(['{"intent": "instruction"}'])
+    state = {
+        "current_query": "Kafka 답변할 때는 영어 용어 그대로 써줘",
+        "messages": [],
+    }
+    out = await query_analyze(state)
+    assert out["intent"] == "instruction"
+
+
+# ---- instruction_save ----
+
+
+@pytest.mark.asyncio
+async def test_instruction_save_no_user_id_skips_persistence(stub_generator):
+    """Anonymous users still get a friendly reply but nothing is saved."""
+    stub_generator([])  # not called
+    from app.graph.nodes.instruction_save import instruction_save
+
+    out = await instruction_save(
+        {"current_query": "친근한 말투로 대답해", "user_id": ""}
+    )
+    assert "✅" in out["final_answer"]
+    assert "기억하지 못" in out["final_answer"]
+    assert out["sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_instruction_save_persists_and_replies(
+    monkeypatch, stub_judge, stub_generator
+):
+    """Happy path: judge LLM rewrites the md, store is upserted, generator
+    LLM produces the confirmation reply."""
+    stub_judge(["# 사용자 지침\n- 친근한 말투로 답변"])
+    stub_generator(["✅ 앞으로 친근한 말투로 답변하도록 기억해 둘게요."])
+
+    captured: dict = {}
+
+    async def fake_get(user_id, *, client=None):
+        return ""
+
+    async def fake_update(user_id, md, *, client=None):
+        captured["user_id"] = user_id
+        captured["md"] = md
+
+    from app.graph.nodes import instruction_save as mod
+
+    monkeypatch.setattr(mod, "get_user_md", fake_get)
+    monkeypatch.setattr(mod, "update_user_md", fake_update)
+
+    out = await mod.instruction_save(
+        {"current_query": "친근한 말투로 대답해", "user_id": "alice"}
+    )
+
+    assert captured["user_id"] == "alice"
+    assert "친근한 말투" in captured["md"]
+    assert "✅" in out["final_answer"]
+    assert out[PROGRESS_KEY].startswith("📝")
+
+
+@pytest.mark.asyncio
+async def test_instruction_save_falls_back_to_existing_when_merge_blank(
+    monkeypatch, stub_judge, stub_generator
+):
+    """If the merge LLM returns nothing, keep the existing md instead of
+    wiping it."""
+    stub_judge([""])  # blank merge output
+    stub_generator(["✅ 처리되었습니다."])
+
+    captured: dict = {}
+
+    async def fake_get(user_id, *, client=None):
+        return "# 사용자 지침\n- 기존 항목"
+
+    async def fake_update(user_id, md, *, client=None):
+        captured["md"] = md
+
+    from app.graph.nodes import instruction_save as mod
+
+    monkeypatch.setattr(mod, "get_user_md", fake_get)
+    monkeypatch.setattr(mod, "update_user_md", fake_update)
+
+    await mod.instruction_save(
+        {"current_query": "이건 어떻게 처리될까", "user_id": "bob"}
+    )
+    assert captured["md"] == "# 사용자 지침\n- 기존 항목"
+
+
+@pytest.mark.asyncio
+async def test_generate_injects_user_md_block(monkeypatch, stub_generator):
+    """When a user has saved instructions, the generate prompt includes a
+    `[사용자 지침]` block so the LLM follows them."""
+    stub = stub_generator(["답변 본문 [1]"])
+
+    async def fake_get(user_id, *, client=None):
+        return "# 사용자 지침\n- 항상 한 문단으로"
+
+    from app.graph.nodes import generate as gen_mod
+
+    monkeypatch.setattr(gen_mod, "get_user_md", fake_get)
+
+    state = {
+        "intent": "question",
+        "current_query": "RRF는?",
+        "resolved_query": "RRF는?",
+        "user_id": "carol",
+        "candidates": [{"id": "1", "title": "T", "url": "u", "content": "c"}],
+        "sufficient": True,
+    }
+    out = await gen_mod.generate(state)
+    assert out["final_answer"] == "답변 본문 [1]"
+    sent_prompt = stub.calls[0][0].content
+    assert "[사용자 지침]" in sent_prompt
+    assert "한 문단으로" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_omits_block_when_no_user_md(
+    monkeypatch, stub_generator
+):
+    """No saved md → no leading block in the prompt."""
+    stub = stub_generator(["답변 [1]"])
+
+    async def fake_get(user_id, *, client=None):
+        return ""
+
+    from app.graph.nodes import generate as gen_mod
+
+    monkeypatch.setattr(gen_mod, "get_user_md", fake_get)
+    state = {
+        "intent": "question",
+        "current_query": "Q?",
+        "resolved_query": "Q?",
+        "user_id": "",
+        "candidates": [{"id": "1", "title": "T", "url": "u", "content": "c"}],
+        "sufficient": True,
+    }
+    await gen_mod.generate(state)
+    sent_prompt = stub.calls[0][0].content
+    # The prompt template *mentions* `[사용자 지침]` in its rules text, but the
+    # actual injected block (newline-prefixed) must be absent when there's
+    # no saved md. The block format is "\n[사용자 지침]\n{md}\n".
+    assert "\n[사용자 지침]\n" not in sent_prompt

@@ -123,6 +123,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
             "generate",
             "general_chat",
             "debug_explain",
+            "instruction_save",
         ):
             if sources_truncated:
                 continue
@@ -229,15 +230,16 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     yield sse.stop_chunk(model=request.model, completion_id=completion_id)
     yield sse.done_marker()
 
-    # Persist this turn to `{user_id}_logs` so the debug node can replay the
+    # Persist this turn to `chat_logs` so the debug node can replay the
     # trace later. Skip when:
-    #   - user_id is empty (no auth → no per-user index)
-    #   - intent is `debugging` itself (avoid recursive log noise)
+    #   - user_id is empty (no auth → no log)
+    #   - intent is `debugging` (avoid recursive log noise)
+    #   - intent is `instruction` (handled by its own chat_md store)
     # Save errors are best-effort logged inside save_turn — never raise out
     # to the SSE consumer (the response has already finished by this point
     # but we want chat to keep working even if ES is unhealthy).
     intent = final_state.get("intent") or ""
-    if user_id and intent != "debugging":
+    if user_id and intent not in ("debugging", "instruction"):
         try:
             await save_turn(
                 user_id,
@@ -440,6 +442,7 @@ _NODE_NAMES = {
     "generate",
     "general_chat",
     "debug_explain",
+    "instruction_save",
 }
 
 

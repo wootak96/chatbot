@@ -418,6 +418,49 @@ async def test_workflow_debugging_path_replays_logs(
 
 
 @pytest.mark.asyncio
+async def test_workflow_instruction_path_skips_retrieval(
+    monkeypatch, stub_judge, stub_generator, stub_es
+):
+    """Style/tone directives go through instruction_save and never touch
+    retrieval or chat_logs."""
+    stub_judge(
+        [
+            '{"intent": "instruction"}',
+            "# 사용자 지침\n- 친근한 말투로 답변",
+        ]
+    )
+    stub_generator(["✅ 앞으로 친근한 말투로 답변하도록 기억해 둘게요."])
+    counter = stub_es([[]])
+
+    captured: dict = {}
+
+    async def fake_get(user_id, *, client=None):
+        return ""
+
+    async def fake_update(user_id, md, *, client=None):
+        captured["user_id"] = user_id
+        captured["md"] = md
+
+    from app.graph.nodes import instruction_save as mod
+
+    monkeypatch.setattr(mod, "get_user_md", fake_get)
+    monkeypatch.setattr(mod, "update_user_md", fake_update)
+
+    workflow = build_workflow()
+    state = initial_state(
+        [{"role": "user", "content": "친근한 말투로 대답해"}],
+        user_id="alice",
+    )
+    final = await workflow.ainvoke(state)
+
+    assert final["intent"] == "instruction"
+    assert counter["n"] == 0  # never hit ES retrieval
+    assert captured["user_id"] == "alice"
+    assert "친근한 말투" in captured["md"]
+    assert "✅" in final["final_answer"]
+
+
+@pytest.mark.asyncio
 async def test_search_intent_list_is_disabled(stub_judge):
     """`list` is currently disabled — even when the judge returns it, the node
     must coerce search_intent back to `lookup` so es_list never runs."""

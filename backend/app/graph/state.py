@@ -36,7 +36,7 @@ class SearchPlan(TypedDict, total=False):
     semantic: str  # semantic query (same per-index language policy)
 
 
-Intent = Literal["question", "chitchat", "general", "debugging"]
+Intent = Literal["question", "chitchat", "general", "debugging", "instruction"]
 SearchIntent = Literal["lookup", "count", "list"]
 
 

@@ -53,6 +53,7 @@ def stub_judge(monkeypatch):
         # Also patch the module-bound reference each node imported.
         from app.graph import post_check
         from app.graph.nodes import (
+            instruction_save,
             query_analyze,
             query_decompose,
             query_reform,
@@ -75,6 +76,7 @@ def stub_judge(monkeypatch):
             index_route,
             self_check,
             post_check,
+            instruction_save,
         ):
             monkeypatch.setattr(mod, "get_judge_llm", lambda s=stub: s, raising=True)
         return stub
@@ -89,10 +91,16 @@ def stub_generator(monkeypatch):
         from app.graph.nodes import generate as generate_node
         from app.graph.nodes import general_chat as general_chat_node
         from app.graph.nodes import debug_explain as debug_explain_node
+        from app.graph.nodes import instruction_save as instruction_save_node
 
         stub = StubLLM(responses)
         monkeypatch.setattr(llm_factory, "get_generator_llm", lambda: stub)
-        for mod in (generate_node, general_chat_node, debug_explain_node):
+        for mod in (
+            generate_node,
+            general_chat_node,
+            debug_explain_node,
+            instruction_save_node,
+        ):
             monkeypatch.setattr(mod, "get_generator_llm", lambda s=stub: s, raising=True)
         return stub
 

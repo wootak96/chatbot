@@ -103,7 +103,7 @@ async def query_analyze(state: RAGState) -> dict:
     data = await llm_json(get_judge_llm(), prompt)
 
     intent = data.get("intent") or "question"
-    if intent not in ("question", "chitchat", "general", "debugging"):
+    if intent not in ("question", "chitchat", "general", "debugging", "instruction"):
         intent = "question"
 
     # Override 1: debug pattern wins over everything else. Meta-questions
@@ -112,6 +112,9 @@ async def query_analyze(state: RAGState) -> dict:
     if _is_debug_query(query):
         intent = "debugging"
     # Override 2: domain/meta terms force `question` (existing safety net).
+    # Instruction is preserved — directives like "Kafka 답변할 때는 영어 용어
+    # 그대로 써줘" contain domain words but are still preferences, not info
+    # requests. We trust the LLM's `instruction` label here.
     elif intent in ("chitchat", "general") and (
         _has_domain_term(query) or _has_meta_collection_term(query)
     ):

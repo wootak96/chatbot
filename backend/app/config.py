@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # document, not part of the index name, so debug_explain can filter by
     # user without operating on per-user indices.
     es_index_chat_logs: str = "chat_logs"
+    # Per-user persistent instruction store. doc_id = user_id, one document
+    # per user holding accumulated answer-style preferences as markdown.
+    # Read on every answer node, written by the `instruction` intent path.
+    es_index_chat_md: str = "chat_md"
 
     es_field_title: str = "title"
     es_field_content: str = "content"

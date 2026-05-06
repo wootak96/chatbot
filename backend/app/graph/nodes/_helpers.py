@@ -83,6 +83,12 @@ async def llm_json(llm, prompt: str) -> dict[str, Any]:
     return parse_json(content)
 
 
+async def llm_text(llm, prompt: str) -> str:
+    """Invoke the LLM and return its raw text response."""
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    return response.content if hasattr(response, "content") else str(response)
+
+
 def truncate_history(messages: list[dict], turns: int | None = None) -> list[dict]:
     """Keep only the last `turns` user/assistant pairs."""
     if turns is None:

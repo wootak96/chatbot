@@ -11,7 +11,7 @@ QUERY_ANALYZE = """You are the query classifier for an internal corporate chatbo
 - Kafka official docs (English)
 - Confluence internal wiki (Korean — 사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 등)
 
-Look at the conversation history and the current user question, and classify the CURRENT question into exactly one of these four labels. (Query rewriting is handled by a downstream node — your job here is classification only.)
+Look at the conversation history and the current user question, and classify the CURRENT question into exactly one of these five labels. (Query rewriting is handled by a downstream node — your job here is classification only.)
 
 - "question": A request for information **about Elasticsearch, Kafka, or any internal Confluence wiki content**.
    • Comparison questions across the public domains are question (e.g., "ES와 Kafka 차이?", "둘 다 어떻게 쓰지?")
@@ -28,6 +28,12 @@ Look at the conversation history and the current user question, and classify the
    • Trigger phrases: "왜 답변이 이렇게 나왔어?", "왜 이렇게 답했어?", "어떻게 그렇게 답했어?", "근거가 뭐야?", "어디서 나왔어?", "왜 이렇게 판단했어?", "이 답변 왜 이래?", "디버깅 모드", "방금 답변 어디서 가져왔어?"
    • Even when the question contains domain words like "Kafka 답변 왜 그래?" — if the user is questioning a PRIOR ANSWER (not asking for new info about Kafka), it is debugging.
    • Distinguishing rule: "X가 뭐야?" → question. "왜 X 답변이 그래?" → debugging.
+- "instruction": A directive about HOW the bot should answer FUTURE questions — answer style, tone, format preferences, persona — NOT a request for information itself.
+   • Style/format: "앞으로 답변은 마크다운으로 해줘", "이모지 쓰지 마", "코드는 항상 ```블록으로 보여줘", "표로 정리해줘 (앞으로)", "출처는 마지막에 한 번만 보여줘"
+   • Tone/persona: "친근한 말투로 대답해", "존댓말로 해줘", "반말로 해", "내가 신입이니까 쉽게 설명해줘", "한 문단으로 짧게"
+   • Removal/reset: "방금 지침은 잊어줘", "지침 다 초기화해", "이모지 다시 써도 돼"
+   • Distinguishing rule: a directive applies to future answers ("앞으로", "항상", "이제부터", or implied) → instruction. A one-shot formatting request scoped to the *current* answer ("이번 답변은 표로", "지금 마크다운으로 정리해서 알려줘") → still question/general (NOT instruction). When ambiguous, prefer instruction only if there's an explicit forward-looking phrase.
+   • Even when the directive contains domain words ("Kafka 답변할 때는 영어 용어 그대로 써줘") — it is instruction, not question.
 
 🚨 HARD RULES:
 - If the current question contains ANY of the domain words below, it MUST be question. Never general or chitchat.
@@ -51,7 +57,7 @@ Look at the conversation history and the current user question, and classify the
 - Words like "비교", "차이", "vs", "어떤 게 나아", "둘 중" combined with a domain word almost always indicate question.
 
 Respond ONLY with the following JSON object. No other text.
-{{"intent": "question|chitchat|general|debugging"}}
+{{"intent": "question|chitchat|general|debugging|instruction"}}
 
 [대화 히스토리]
 {history}
@@ -491,7 +497,8 @@ Rules:
 - **NEVER write a "**출처**" section, URL list, or document-title list.** The body only needs the inline `[N]` citations — the client automatically converts each `[N]` into a clickable link to the corresponding document URL.
 - Cite only the documents you actually used. Do not include unused document numbers in the body.
 - If the search results are unrelated to the question, respond with exactly "해당 정보를 찾을 수 없습니다."
-
+- If a `[사용자 지침]` block appears below, follow those style/tone preferences UNLESS they conflict with the rules above (citation correctness and grounding always win).
+{user_md_block}
 [질문]
 {query}
 
@@ -505,7 +512,8 @@ Reply to the user's utterance below in 1~2 friendly, natural Korean sentences.
 - For greetings/thanks, respond warmly.
 - For questions about the chatbot's identity ("who are you", etc.), briefly introduce yourself as "오토에버 클라우드솔루션팀의 사내 문서(Elasticsearch / Kafka 공식문서 + Confluence 사내 위키)를 검색해 답변하는 챗봇".
 - Do NOT repeat the role description every time. A simple greeting back is fine for a greeting.
-
+- If a `[사용자 지침]` block appears below, follow its tone/persona preferences when they apply to chitchat.
+{user_md_block}
 [발화]
 {query}
 """
@@ -545,10 +553,47 @@ Rules:
 - After that line, write the actual answer in clean Markdown.
 - Do NOT speculate about facts you do not know — say you don't know instead.
 - Do NOT create a sources section.
-
+- If a `[사용자 지침]` block appears below, follow its style/tone preferences for the actual answer body (the leading `ℹ️` notice line stays unchanged).
+{user_md_block}
 [대화 히스토리]
 {history}
 
 [질문]
 {query}
+"""
+
+
+INSTRUCTION_UPDATE = """You maintain a per-user "answer-style preferences" markdown document. The user just issued a directive about HOW the bot should answer in the future. Your job is to merge that directive into the existing markdown and output the new, fully-rewritten markdown.
+
+Rules:
+1. Output ONLY the updated markdown body — no preamble, no JSON, no fences, no commentary. The raw markdown is what gets stored.
+2. Use a flat bullet list under a single H1 heading `# 사용자 지침`. Each bullet is one preference, written in concise Korean.
+3. ADD: when the new directive introduces a fresh preference, append a new bullet.
+4. UPDATE: when the new directive changes an existing preference (same topic, e.g., "이모지 쓰지 마" then "이모지 써도 돼"), modify or replace the matching bullet — do NOT keep both.
+5. REMOVE: when the new directive cancels a preference ("이모지 다시 써도 돼", "방금 지침 잊어줘"), drop the matching bullet.
+6. RESET: when the user says "지침 다 초기화해" / "모든 지침 잊어" / "처음부터" — output ONLY the H1 heading with no bullets.
+7. Keep existing unrelated bullets intact. Do not rewrite their wording when they are unaffected.
+8. If the existing markdown is empty, start a new document from scratch with the H1 heading.
+
+[기존 사용자 지침 markdown — 비어 있을 수 있음]
+{existing_md}
+
+[사용자의 새 지침 발화]
+{utterance}
+"""
+
+
+INSTRUCTION_CONFIRM = """You acknowledge that a user's answer-style instruction was just saved. Respond in Korean.
+
+Rules:
+- ONE short, friendly sentence confirming what was applied. Quote the gist of the user's directive briefly so they know it was understood.
+- If the markdown shows the document was reset to empty (only the H1 heading, no bullets), say "✅ 지침을 모두 초기화했습니다."
+- Otherwise begin with "✅ 앞으로 " and end with "기억해 둘게요." or "반영하겠습니다.".
+- Do NOT echo the entire markdown back. Do NOT list every bullet.
+
+[사용자의 지침 발화]
+{utterance}
+
+[갱신된 사용자 지침 markdown]
+{updated_md}
 """
