@@ -358,12 +358,13 @@ Respond ONLY with JSON:
 INDEX_ROUTE = """You are the index router for a RAG chatbot.
 
 Available indices:
-- "elasticsearch": Elasticsearch official documentation. Search/indexing/RRF/kNN/mappings, analyzer/tokenizer, dense_vector/semantic_text. **반드시 elasticsearch로 라우팅해야 하는 토픽**:
+- "elasticsearch": Elasticsearch 공식문서. **다음 5개 운영/레퍼런스 성격 토픽에 한해서만** 이 인덱스로 라우팅한다:
   - **REST API 레퍼런스** — 엔드포인트, 파라미터, 요청·응답 스키마, query DSL, aggregations DSL, painless script
   - **클러스터 운영 가이드** — cluster admin / scaling / capacity planning / shard 배치 / cold·warm·hot tier / backup·snapshot·restore / monitoring / 보안·인증 (TLS, API key, role) / circuit breaker / JVM 튜닝
   - **트러블슈팅** — Elasticsearch 8~9 troubleshooting, red/yellow cluster, OOM, slow query, mapping conflict, recovery 실패 진단
   - **업그레이드** — major/minor upgrade guide (특히 8.x → 9.x migration), reindex from remote, breaking changes
   - **릴리즈 노트** — changelog, new features, breaking changes, deprecations (버전별 GA/RC 노트)
+  위 5개에 해당하지 않는 ES 질문 — 개요/입문, RRF/BM25/kNN 메커니즘 설명, 학습 자료, 사용 사례, 일반 도입 가이드, ES vs OpenSearch 비교, 검색 엔진 기초 등 — 은 `elasticsearch` 가 아니라 **`confluence`** 로 라우팅한다 (사내 위키에 학습/도입 자료가 정리되어 있고, 공식문서는 운영/레퍼런스 위주이기 때문).
 - "kafka": Apache Kafka official documentation, topics/partitions/consumers/producers/streams, **Kafka KIPs (Kafka Improvement Proposals)**, **Kafka release notes**, **JIRA issue tracker**, **Sarama Go client**, **Confluent Schema Registry**, **librdkafka C client**, **Amazon MSK developer guide**, etc.
 - "confluence": 사내 Confluence 위키 문서. **사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 / 사내 프로젝트 메모 / 한국어로 작성된 운영·관리 문서** 등. ES/Kafka 같은 기술 토픽이라도 "사내 운영", "사내 가이드", "회의록", "인수인계", "장애 대응 절차" 같은 사내 맥락이 함께 등장하면 confluence를 선택.
   - **사내 전용 고유명사 (이 단어가 등장하면 항상 `confluence` 포함)**:
@@ -376,11 +377,22 @@ Available indices:
 
 Routing guidance:
 - If the question clearly belongs to ONE index only, pick that one.
-- **공식문서 토픽 우선 규칙**: ES 또는 Kafka의 REST API 레퍼런스, 클러스터/브로커 운영, 트러블슈팅, 업그레이드, 릴리즈 노트에 관한 질문은 (다른 한정자가 없는 한) `elasticsearch` 또는 `kafka`로 라우팅. "운영 가이드"라는 표현이 등장해도 사내 맥락("사내", "우리", "팀", "내부 클러스터") 없이 일반적인 ES/Kafka 운영을 묻는 거면 공식문서 인덱스로 보낸다.
+- **ES 5-토픽 게이트**: ES 질문은 위 5개 운영/레퍼런스 토픽에만 `elasticsearch`로 라우팅. 그 외 ES 관련 질문(개요, 메커니즘 설명, 학습/도입 자료, ES vs OpenSearch/Solr 비교 등)은 `elasticsearch`가 아니라 `confluence`로 보낸다.
+- **Kafka 토픽 규칙**: Kafka의 REST/admin API, 브로커·컨슈머·프로듀서 운영, 트러블슈팅, 업그레이드, 릴리즈 노트는 `kafka`로 라우팅. (Kafka는 ES와 달리 5-토픽 외 질문도 일반적으로 공식문서가 1차 소스이므로 그대로 `kafka`를 선호한다.) "운영 가이드"라는 표현이 등장해도 사내 맥락("사내", "우리", "팀", "내부 클러스터") 없으면 `kafka`로 보낸다.
 - If the question explicitly references BOTH a public technology (Elasticsearch/Kafka) AND an internal operational context ("사내 운영 가이드", "사내 장애 대응", "회의록", "인수인계"), pick both the relevant public index AND `confluence`.
 - If the question contains any HMG-internal proper noun listed above, ALWAYS include `confluence` in the result (alone, or together with `elasticsearch`/`kafka` when public-tech terms also appear).
 - If the question compares public domains (e.g., ES vs Kafka), pick both `elasticsearch` and `kafka`.
 - If the question is ambiguous and you cannot tell, pick all relevant indices (recall first).
+
+라우팅 예시:
+- "ES /_search API 응답 스키마" → `elasticsearch` (REST API 레퍼런스)
+- "ES 클러스터 capacity planning" → `elasticsearch` (운영 가이드)
+- "ES 9.0 릴리즈 노트" → `elasticsearch` (릴리즈 노트)
+- "Elasticsearch가 뭐야?" → `confluence` (개요/입문 — 5-토픽 외)
+- "RRF 어떻게 동작해?" → `confluence` (메커니즘 설명 — 5-토픽 외)
+- "ES 학습 자료 추천해줘" → `confluence` (학습 자료 — 5-토픽 외)
+- "ES vs OpenSearch 차이" → `confluence` (비교/소개 — 5-토픽 외)
+- "사내 ES 클러스터 capacity" → `elasticsearch` + `confluence` (운영 + 사내 맥락)
 
 Respond ONLY with JSON:
 {{"indices": ["elasticsearch", "kafka", "confluence"]}}
