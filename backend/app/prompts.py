@@ -529,7 +529,7 @@ Rules:
 - Insert citations of the form [1], [2] inline in the answer body. Citation numbers MUST match the document order below.
 - **NEVER write a "**출처**" section, URL list, or document-title list.** The body only needs the inline `[N]` citations — the client automatically converts each `[N]` into a clickable link to the corresponding document URL.
 - Cite only the documents you actually used. Do not include unused document numbers in the body.
-- If the search results are unrelated to the question, respond with exactly "해당 정보를 찾을 수 없습니다."
+- Escape phrase rule (STRICT): respond with exactly "해당 정보를 찾을 수 없습니다." ONLY when **every single provided document is clearly off-topic**. If even ONE document partially relates to the question, you MUST attempt an answer based on that document with `[N]` citation — do NOT escape just because no single document fully answers the question. Partial answers are preferred over the escape phrase: cite what is supported, and for the rest write a brief one-line note like "이 부분은 검색된 문서에 직접 언급되어 있지 않습니다." Don't conflate "no exact phrasing match" with "unrelated"; surface terminology often differs from query wording.
 - If a `[사용자 지침]` block appears below, follow those style/tone preferences UNLESS they conflict with the rules above (citation correctness and grounding always win).
 {user_md_block}
 [질문]
