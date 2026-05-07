@@ -9,7 +9,13 @@ def _settings_with_title() -> Settings:
 
 
 def _settings_no_title() -> Settings:
-    return Settings(es_field_title="", es_field_content="content", es_field_semantic="content_embedding")
+    """Both title fields disabled → single-field fallback on content."""
+    return Settings(
+        es_field_title="",
+        es_field_ancestors_title="",
+        es_field_content="content",
+        es_field_semantic="content_embedding",
+    )
 
 
 def test_rrf_query_shape_with_title():
@@ -24,7 +30,11 @@ def test_rrf_query_shape_with_title():
     bm25_q = rrf["retrievers"][0]["standard"]["query"]["multi_match"]
     assert bm25_q["query"] == "Elasticsearch RRF"
     assert "title^2" in bm25_q["fields"]
+    assert "ancestors.title^1.5" in bm25_q["fields"]
     assert "content" in bm25_q["fields"]
+    # `lenient` lets the cross-index search ignore ancestors.title on
+    # indices (ES/Kafka docs) that don't map that field.
+    assert bm25_q.get("lenient") is True
 
     sem_q = rrf["retrievers"][1]["standard"]["query"]["semantic"]
     assert sem_q["field"] == s.es_field_semantic
@@ -90,3 +100,28 @@ def test_size_uses_top_k():
     assert q["size"] == s.retrieval_top_k
     q2 = build_rrf_query("x", settings=s, size=3)
     assert q2["size"] == 3
+
+
+def test_rrf_query_ancestors_title_field_omitted_when_setting_empty():
+    """If the ancestors.title field is unconfigured (empty string), it must
+    not show up in the BM25 multi_match — only title^2 + content remain."""
+    s = Settings(
+        es_field_title="title",
+        es_field_content="content",
+        es_field_semantic="content_embedding",
+        es_field_ancestors_title="",
+    )
+    q = build_rrf_query("x", settings=s)
+    bm25 = q["retriever"]["rrf"]["retrievers"][0]["standard"]["query"]["multi_match"]
+    assert "title^2" in bm25["fields"]
+    assert "content" in bm25["fields"]
+    assert not any("ancestors" in f for f in bm25["fields"])
+
+
+def test_rrf_query_three_fields_total():
+    """Default settings → BM25 multi_match searches exactly 3 fields:
+    title (^2), ancestors.title (^1.5), content."""
+    s = _settings_with_title()
+    q = build_rrf_query("x", settings=s)
+    bm25 = q["retriever"]["rrf"]["retrievers"][0]["standard"]["query"]["multi_match"]
+    assert len(bm25["fields"]) == 3

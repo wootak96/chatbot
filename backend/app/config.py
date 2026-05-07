@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     es_field_content: str = "content"
     es_field_semantic: str = "content_embedding"
     es_field_url: str = "url"
+    # Confluence-style page hierarchy ("ancestors[].title"). Indexed as
+    # `ancestors.title` (object array → flattened sub-field). Searching this
+    # lets a question about a parent section title surface child pages.
+    # Other indices (elasticsearch_docs / kafka_docs) don't have this field;
+    # the BM25 query uses `lenient: true` so it's silently ignored there.
+    es_field_ancestors_title: str = "ancestors.title"
 
     retrieval_rank_window: int = 50
     retrieval_rank_constant: int = 60

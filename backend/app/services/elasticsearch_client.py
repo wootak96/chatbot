@@ -53,10 +53,14 @@ def build_rrf_query(
     final_size = size or s.retrieval_top_k
     sem_text = semantic_query_text if semantic_query_text else bm25_query_text
 
-    # BM25: search content (and title with ^2 boost if the index has it).
+    # BM25: search content + title (^2 boost) + ancestors.title (^1.5 boost,
+    # confluence page hierarchy). `lenient: true` so non-confluence indices
+    # that don't map ancestors.title don't fail the cross-index search.
     bm25_fields: list[str] = []
     if s.es_field_title:
         bm25_fields.append(f"{s.es_field_title}^2")
+    if s.es_field_ancestors_title:
+        bm25_fields.append(f"{s.es_field_ancestors_title}^1.5")
     bm25_fields.append(s.es_field_content)
     if len(bm25_fields) == 1:
         bm25_query: dict[str, Any] = {
@@ -68,6 +72,7 @@ def build_rrf_query(
                 "query": bm25_query_text,
                 "fields": bm25_fields,
                 "type": "best_fields",
+                "lenient": True,
             }
         }
 
