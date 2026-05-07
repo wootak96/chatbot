@@ -17,6 +17,11 @@ CHAT_HTML = """<!doctype html>
 <meta charset="utf-8">
 <title>오토에버 클라우드솔루션팀 챗봇</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Markdown renderer (GFM: tables, lists, headings) + sanitizer. Loaded
+     synchronously so the renderText() defined further down can rely on
+     globals `marked` and `DOMPurify` being present at first call. -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 <style>
   /* iPhone / iMessage-inspired theme */
   :root {
@@ -211,6 +216,38 @@ CHAT_HTML = """<!doctype html>
     margin: 8px 0;
   }
   .msg .body pre code { background: none; padding: 0; font-size: 13px; }
+  /* GFM block elements emitted by marked. The bubble's pre-wrap default
+     would force a blank line between every block — disable inside body. */
+  .msg .body { white-space: normal; }
+  .msg .body p { margin: 0.4em 0; }
+  .msg .body p:first-child { margin-top: 0; }
+  .msg .body p:last-child { margin-bottom: 0; }
+  .msg .body ul, .msg .body ol { margin: 0.4em 0; padding-left: 1.4em; }
+  .msg .body li { margin: 0.15em 0; }
+  .msg .body h1, .msg .body h2, .msg .body h3,
+  .msg .body h4, .msg .body h5, .msg .body h6 {
+    margin: 0.5em 0 0.3em; font-weight: 600;
+  }
+  .msg .body h1 { font-size: 1.15em; }
+  .msg .body h2 { font-size: 1.08em; }
+  .msg .body h3 { font-size: 1.02em; }
+  .msg .body h4, .msg .body h5, .msg .body h6 { font-size: 1em; }
+  .msg .body blockquote {
+    margin: 0.4em 0; padding: 2px 10px;
+    border-left: 3px solid var(--separator); color: var(--text-soft);
+  }
+  .msg .body hr { border: none; border-top: 1px solid var(--separator); margin: 0.6em 0; }
+  .msg .body table {
+    border-collapse: collapse; margin: 0.6em 0; font-size: 13.5px;
+    display: block; overflow-x: auto; max-width: 100%;
+  }
+  .msg .body th, .msg .body td {
+    border: 1px solid var(--separator);
+    padding: 4px 8px; text-align: left; vertical-align: top;
+  }
+  .msg .body th {
+    background: rgba(120,120,128,0.10); font-weight: 600;
+  }
   /* iOS-style input footer */
   footer {
     padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
@@ -709,30 +746,71 @@ CHAT_HTML = """<!doctype html>
     const stripped = text.slice(0, m.index) + text.slice(m.index + m[0].length);
     return { stripped, cites };
   }
+  // Walk text nodes under `root` and convert `[N]` tokens into clickable
+  // anchors using the {n: url} map. Text inside <a>/<code>/<pre> is left
+  // alone so we don't double-link or mangle code samples.
+  function linkCitations(root, cites) {
+    if (!cites) return;
+    const skip = { A: 1, CODE: 1, PRE: 1 };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const parent = node.parentNode;
+      if (!parent || skip[parent.tagName]) continue;
+      const text = node.nodeValue;
+      if (!text || text.indexOf('[') < 0) continue;
+      const re = /\\[(\\d+)\\]/g;
+      let m, last = 0, frag = null;
+      while ((m = re.exec(text)) !== null) {
+        const url = cites[+m[1]];
+        if (!url) continue;
+        if (!frag) frag = document.createDocumentFragment();
+        if (m.index > last) {
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        }
+        const a = document.createElement('a');
+        a.className = 'cite';
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = m[0];
+        frag.appendChild(a);
+        last = m.index + m[0].length;
+      }
+      if (frag) {
+        if (last < text.length) {
+          frag.appendChild(document.createTextNode(text.slice(last)));
+        }
+        parent.replaceChild(frag, node);
+      }
+    }
+  }
+
+  // Full GFM markdown via marked, sanitized via DOMPurify. Tables, lists,
+  // headings, blockquotes, code fences, autolinks, etc. all work. The
+  // legacy mini-renderer is gone — this is now the single rendering path.
   function renderText(text, cites) {
     cites = cites || {};
-    // Pull out triple-backtick code blocks first.
-    const blocks = [];
-    text = text.replace(/```([\\s\\S]*?)```/g, (_, code) => {
-      const i = blocks.length;
-      blocks.push(code);
-      return `\\u0000CODEBLOCK${i}\\u0000`;
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+      // CDN failed to load — fall back to escaped plaintext so chat at
+      // least keeps showing the answer instead of breaking.
+      return escapeHtml(text || '');
+    }
+    const rawHtml = marked.parse(text || '', { breaks: true, gfm: true });
+    const cleanHtml = DOMPurify.sanitize(rawHtml, {
+      ADD_ATTR: ['target', 'rel'],
     });
-    let html = escapeHtml(text);
-    html = html.replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`);
-    html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-    html = html.replace(/(https?:\\/\\/[^\\s)]+)/g,
-      (m) => `<a href="${m}" target="_blank" rel="noopener">${m}</a>`);
-    // Replace inline [N] citation tokens with anchors when a URL is mapped.
-    html = html.replace(/\\[(\\d+)\\]/g, (m, n) => {
-      const url = cites[+n];
-      if (!url) return m;
-      return `<a class="cite" href="${url}" target="_blank" rel="noopener">${m}</a>`;
-    });
-    html = html.replace(/\\u0000CODEBLOCK(\\d+)\\u0000/g, (_, i) => {
-      return `<pre><code>${escapeHtml(blocks[+i])}</code></pre>`;
-    });
-    return html;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = cleanHtml;
+    linkCitations(tmp, cites);
+    // Force external links to open in a new tab — marked's autolinks and
+    // user-pasted urls don't get target=_blank otherwise.
+    for (const a of tmp.querySelectorAll('a[href^="http"]')) {
+      if (!a.target) a.target = '_blank';
+      if (!a.rel) a.rel = 'noopener';
+    }
+    return tmp.innerHTML;
   }
 
   function renderMessage(role, content) {
