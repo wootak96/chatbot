@@ -120,7 +120,7 @@ def render_docs_brief(docs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def render_docs_full(docs: list[dict], char_limit: int = 1500) -> str:
+def render_docs_full(docs: list[dict], char_limit: int = 4000) -> str:
     if not docs:
         return "(검색된 문서 없음)"
     lines = []

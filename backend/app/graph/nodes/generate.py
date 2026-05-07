@@ -3,6 +3,7 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage
 
 from app import prompts
+from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
 from app.graph.nodes._helpers import render_docs_full
 from app.graph.state import RAGState
@@ -39,7 +40,10 @@ async def generate(state: RAGState) -> dict:
             }
         prompt = prompts.GENERATE.format(
             query=query,
-            docs=render_docs_full(candidates),
+            docs=render_docs_full(
+                candidates,
+                char_limit=get_settings().generate_doc_char_limit,
+            ),
             user_md_block=user_md_block,
         )
         sources = [

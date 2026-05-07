@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     retrieval_rank_constant: int = 60
     retrieval_top_k: int = 10
     retrieval_max_retry: int = 2
+    # Per-doc body cap shown to the answer LLM. Bigger means more context
+    # reaches the LLM (and longer pages have a chance to surface their
+    # actual answer body that was past the head section), at the cost of
+    # input tokens. With top_k=10, total doc context ≈ char_limit × 10.
+    generate_doc_char_limit: int = 4000
 
     max_history_turns: int = 5
 
