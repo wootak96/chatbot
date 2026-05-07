@@ -261,7 +261,10 @@ Produce TWO outputs:
 1. "keywords"  — for BM25 lexical search.
    - Drop stopwords (English: "what is", "how to", "the", "a", question marks; Korean: 조사/어미/의문 표현 such as "이/가/은/는/을/를/에서/뭐야/어떻게").
    - Keep only the 2~6 most informative content nouns / proper nouns.
-   - Normalize abbreviations (ES → Elasticsearch, K8s → Kubernetes, kafka cg → Kafka consumer group).
+   - **Normalize technical terms to canonical ENGLISH form** — applies to BOTH targets, even when the rest of the output is Korean (confluence_docs). Convert:
+     • Korean transliterations of product/protocol names: 엘라스틱서치/일래스틱서치 → Elasticsearch, 오픈서치 → OpenSearch, 카프카 → Kafka, 키바나 → Kibana, 로그스태시 → Logstash, 비츠 → Beats, 그라파나 → Grafana, 프로메테우스 → Prometheus, 도커 → Docker, 쿠버네티스 → Kubernetes, 헬름 → Helm, 테라폼 → Terraform, 깃허브 → GitHub
+     • Korean tech vocabulary: 컨슈머 → consumer, 프로듀서 → producer, 브로커 → broker, 파티션 → partition, 토픽 → topic, 인덱스 → index, 샤드 → shard, 매핑 → mapping, 클러스터 → cluster, 노드 → node, 레플리카 → replica, 임베딩 → embedding, 시맨틱 → semantic, 벡터 → vector
+     • Abbreviations: ES → Elasticsearch, K8s → Kubernetes, kafka cg → Kafka consumer group, opensearch → OpenSearch (lowercase to canonical case)
    - Output as a single space-separated string.
 2. "semantic"  — for semantic (vector) search. **A NOUN PHRASE that preserves the question's intent. NOT a hypothetical answer.**
    - Length: 4~12 tokens.
@@ -305,15 +308,19 @@ The retrieval layer fetches evidence; the LLM does the synthesis afterwards. Wor
    (Note: "정리" is a synthesis verb — dropped.)
 7. target_index: confluence_docs
    Input: "ES 클러스터 운영 어떻게 해?"
-   Output: {{"keywords": "Elasticsearch 클러스터 운영 가이드", "semantic": "Elasticsearch 클러스터 운영 절차"}}
-   (Korean output for Korean corpus; "Elasticsearch" and "클러스터" both kept; "어떻게 해" stripped.)
+   Output: {{"keywords": "Elasticsearch cluster 운영 가이드", "semantic": "Elasticsearch cluster 운영 절차"}}
+   (Korean corpus, but technical terms normalized to English: "ES" → "Elasticsearch", "클러스터" → "cluster". Korean operations vocabulary "운영" stays Korean.)
 8. target_index: confluence_docs
-   Input: "Kafka 컨슈머 그룹 장애 대응"
+   Input: "카프카 컨슈머 그룹 장애 대응"
    Output: {{"keywords": "Kafka consumer group 장애 대응", "semantic": "Kafka consumer group 장애 대응 절차"}}
-   (Technical term "Kafka consumer group" preserved in English; rest in Korean.)
+   (Korean transliterations "카프카"/"컨슈머 그룹" → English. "장애 대응" stays Korean.)
 9. target_index: confluence_docs
    Input: "RRF 회의록"
    Output: {{"keywords": "RRF 회의록", "semantic": "RRF 회의록 내용"}}
+10. target_index: elasticsearch_docs
+    Input: "오픈서치랑 차이점이 뭐야?"
+    Output: {{"keywords": "OpenSearch Elasticsearch differences", "semantic": "differences between OpenSearch and Elasticsearch"}}
+    (Korean transliteration "오픈서치" → "OpenSearch". "차이점" itself is a synthesis verb but the sub-query already singled out OpenSearch as the topic, so search for the entity.)
 
 Respond with ONLY a JSON object in this exact shape (no other text):
 {{"keywords": "...", "semantic": "..."}}
@@ -351,7 +358,12 @@ Respond ONLY with JSON:
 INDEX_ROUTE = """You are the index router for a RAG chatbot.
 
 Available indices:
-- "elasticsearch": Elasticsearch official documentation. Search/indexing/RRF/kNN/mappings, **Elasticsearch 8 ~ 9 troubleshooting**, **upgrade guides (including 8.x → 9.x migration)**, **REST API reference (endpoints / parameters / request·response specs)**, etc.
+- "elasticsearch": Elasticsearch official documentation. Search/indexing/RRF/kNN/mappings, analyzer/tokenizer, dense_vector/semantic_text. **반드시 elasticsearch로 라우팅해야 하는 토픽**:
+  - **REST API 레퍼런스** — 엔드포인트, 파라미터, 요청·응답 스키마, query DSL, aggregations DSL, painless script
+  - **클러스터 운영 가이드** — cluster admin / scaling / capacity planning / shard 배치 / cold·warm·hot tier / backup·snapshot·restore / monitoring / 보안·인증 (TLS, API key, role) / circuit breaker / JVM 튜닝
+  - **트러블슈팅** — Elasticsearch 8~9 troubleshooting, red/yellow cluster, OOM, slow query, mapping conflict, recovery 실패 진단
+  - **업그레이드** — major/minor upgrade guide (특히 8.x → 9.x migration), reindex from remote, breaking changes
+  - **릴리즈 노트** — changelog, new features, breaking changes, deprecations (버전별 GA/RC 노트)
 - "kafka": Apache Kafka official documentation, topics/partitions/consumers/producers/streams, **Kafka KIPs (Kafka Improvement Proposals)**, **Kafka release notes**, **JIRA issue tracker**, **Sarama Go client**, **Confluent Schema Registry**, **librdkafka C client**, **Amazon MSK developer guide**, etc.
 - "confluence": 사내 Confluence 위키 문서. **사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 / 사내 프로젝트 메모 / 한국어로 작성된 운영·관리 문서** 등. ES/Kafka 같은 기술 토픽이라도 "사내 운영", "사내 가이드", "회의록", "인수인계", "장애 대응 절차" 같은 사내 맥락이 함께 등장하면 confluence를 선택.
   - **사내 전용 고유명사 (이 단어가 등장하면 항상 `confluence` 포함)**:
@@ -364,6 +376,7 @@ Available indices:
 
 Routing guidance:
 - If the question clearly belongs to ONE index only, pick that one.
+- **공식문서 토픽 우선 규칙**: ES 또는 Kafka의 REST API 레퍼런스, 클러스터/브로커 운영, 트러블슈팅, 업그레이드, 릴리즈 노트에 관한 질문은 (다른 한정자가 없는 한) `elasticsearch` 또는 `kafka`로 라우팅. "운영 가이드"라는 표현이 등장해도 사내 맥락("사내", "우리", "팀", "내부 클러스터") 없이 일반적인 ES/Kafka 운영을 묻는 거면 공식문서 인덱스로 보낸다.
 - If the question explicitly references BOTH a public technology (Elasticsearch/Kafka) AND an internal operational context ("사내 운영 가이드", "사내 장애 대응", "회의록", "인수인계"), pick both the relevant public index AND `confluence`.
 - If the question contains any HMG-internal proper noun listed above, ALWAYS include `confluence` in the result (alone, or together with `elasticsearch`/`kafka` when public-tech terms also appear).
 - If the question compares public domains (e.g., ES vs Kafka), pick both `elasticsearch` and `kafka`.
