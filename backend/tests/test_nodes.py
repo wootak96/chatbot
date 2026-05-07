@@ -388,6 +388,55 @@ async def test_index_route_no_subqueries(stub_judge):
 
 
 @pytest.mark.asyncio
+async def test_index_route_internal_term_forces_confluence(stub_judge):
+    """HMG-internal proper nouns must always include confluence_docs even if
+    the LLM picks something else. Belt-and-braces over the LLM."""
+    # LLM hallucinates: routes Hmgcloud to elasticsearch (it doesn't know the
+    # term). Our deterministic override must add confluence_docs.
+    stub_judge(['{"indices": ["elasticsearch"]}'])
+    out = await index_route(
+        {"sub_queries": ["Hmgcloud 사용법"], "intent": "question"}
+    )
+    assert set(out["target_indices_per_query"][0]) == {
+        "elasticsearch_docs",
+        "confluence_docs",
+    }
+
+
+@pytest.mark.asyncio
+async def test_index_route_internal_path_namespace(stub_judge):
+    """Internal ES path namespaces (/es_engine, /es_log, /es_data) route to
+    confluence even when the LLM would otherwise pick only public indices."""
+    stub_judge(['{"indices": ["elasticsearch"]}'])
+    out = await index_route(
+        {"sub_queries": ["/es_engine 인덱스 설정"], "intent": "question"}
+    )
+    assert "confluence_docs" in out["target_indices_per_query"][0]
+
+
+@pytest.mark.asyncio
+async def test_index_route_internal_term_no_duplicate_confluence(stub_judge):
+    """When the LLM already picks confluence, the override must NOT duplicate
+    it — set semantics, not list-append."""
+    stub_judge(['{"indices": ["confluence"]}'])
+    out = await index_route(
+        {"sub_queries": ["완성차 운영 가이드"], "intent": "question"}
+    )
+    assert out["target_indices_per_query"][0].count("confluence_docs") == 1
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_internal_term_overrides_general(stub_judge):
+    """Sentences that contain only an HMG-internal proper noun and no other
+    domain word (e.g., "Hmgsearch가 뭐야?") must still go to the search path."""
+    stub_judge(['{"intent": "general"}'])
+    out = await query_analyze(
+        {"current_query": "Hmgsearch가 뭐야?", "messages": []}
+    )
+    assert out["intent"] == "question"
+
+
+@pytest.mark.asyncio
 async def test_hybrid_retrieve_merges_dedupes(stub_es):
     stub_es(
         [

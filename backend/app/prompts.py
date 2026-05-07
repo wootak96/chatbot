@@ -354,10 +354,18 @@ Available indices:
 - "elasticsearch": Elasticsearch official documentation. Search/indexing/RRF/kNN/mappings, **Elasticsearch 8 ~ 9 troubleshooting**, **upgrade guides (including 8.x → 9.x migration)**, **REST API reference (endpoints / parameters / request·response specs)**, etc.
 - "kafka": Apache Kafka official documentation, topics/partitions/consumers/producers/streams, **Kafka KIPs (Kafka Improvement Proposals)**, **Kafka release notes**, **JIRA issue tracker**, **Sarama Go client**, **Confluent Schema Registry**, **librdkafka C client**, **Amazon MSK developer guide**, etc.
 - "confluence": 사내 Confluence 위키 문서. **사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 / 사내 프로젝트 메모 / 한국어로 작성된 운영·관리 문서** 등. ES/Kafka 같은 기술 토픽이라도 "사내 운영", "사내 가이드", "회의록", "인수인계", "장애 대응 절차" 같은 사내 맥락이 함께 등장하면 confluence를 선택.
+  - **사내 전용 고유명사 (이 단어가 등장하면 항상 `confluence` 포함)**:
+    플랫폼/제품명 — Hmgcloud, hCloud, Hmgsearch, vaatz, evplatform
+    사내 약어 — DSP, vDSP, OTA, AIP, PAM, HAE
+    사옥/지역 — 상암, 가산, 광주
+    조직/도메인 — 클라우드솔루션, 완성차
+    사내 ES 네임스페이스 경로 — /es_engine, /es_log, /es_data
+    이런 단어들은 외부 공개 문서에는 등장하지 않으므로 일반 acronym (예: "DSP" = "Digital Signal Processing")으로 해석하지 말 것.
 
 Routing guidance:
 - If the question clearly belongs to ONE index only, pick that one.
 - If the question explicitly references BOTH a public technology (Elasticsearch/Kafka) AND an internal operational context ("사내 운영 가이드", "사내 장애 대응", "회의록", "인수인계"), pick both the relevant public index AND `confluence`.
+- If the question contains any HMG-internal proper noun listed above, ALWAYS include `confluence` in the result (alone, or together with `elasticsearch`/`kafka` when public-tech terms also appear).
 - If the question compares public domains (e.g., ES vs Kafka), pick both `elasticsearch` and `kafka`.
 - If the question is ambiguous and you cannot tell, pick all relevant indices (recall first).
 

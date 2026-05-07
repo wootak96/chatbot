@@ -33,6 +33,28 @@ _DOMAIN_PATTERN = re.compile(
     r")"
 )
 
+
+# Internal-only proper nouns supplied by the user (HMG company terms,
+# product names, location names, internal-namespace path prefixes). Anything
+# matching this MUST also be treated as a domain question and MUST add
+# confluence_docs to the routing — even if the LLM doesn't recognize the
+# term. Kept as a separate pattern so `index_route` can reuse it.
+_INTERNAL_PATTERN = re.compile(
+    r"(?i)("
+    # HMG cloud platforms / internal products
+    r"hmgcloud|hcloud|hmgsearch|vaatz|evplatform|"
+    # Internal acronyms — word boundaries reduce false positives on
+    # substrings inside unrelated English text
+    r"\bvdsp\b|\bdsp\b|\bota\b|\baip\b|\bpam\b|\bhae\b|"
+    # Internal locations (Korean, no boundary needed for CJK)
+    r"상암|가산|광주|"
+    # Team / industry context
+    r"클라우드솔루션|완성차|"
+    # ES path namespaces (leading slash distinguishes from generic words)
+    r"/es_engine|/es_log|/es_data"
+    r")"
+)
+
 # Meta-collection safety net: questions about the chatbot's document
 # collection itself (count / list / total) should always be `question`,
 # even when no specific domain token like "kafka" or "ES" is mentioned.
@@ -70,7 +92,15 @@ _DEBUG_STRONG = re.compile(
 
 
 def _has_domain_term(text: str) -> bool:
-    return bool(_DOMAIN_PATTERN.search(text or ""))
+    if not text:
+        return False
+    return bool(_DOMAIN_PATTERN.search(text) or _INTERNAL_PATTERN.search(text))
+
+
+def _has_internal_term(text: str) -> bool:
+    """True when an HMG-internal proper noun appears — used by the index
+    router to force-include confluence_docs regardless of the LLM verdict."""
+    return bool(_INTERNAL_PATTERN.search(text or ""))
 
 
 def _has_meta_collection_term(text: str) -> bool:
