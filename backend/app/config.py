@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # reaches the LLM (and longer pages have a chance to surface their
     # actual answer body that was past the head section), at the cost of
     # input tokens. With top_k=10, total doc context ≈ char_limit × 10.
-    generate_doc_char_limit: int = 4000
+    generate_doc_char_limit: int = 5000
 
     max_history_turns: int = 5
 
