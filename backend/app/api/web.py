@@ -164,7 +164,7 @@ CHAT_HTML = """<!doctype html>
   main {
     flex: 1; overflow-y: auto; padding: 16px 14px 24px;
     display: flex; flex-direction: column; gap: 4px;
-    max-width: 760px; margin: 0 auto; width: 100%;
+    max-width: 1100px; margin: 0 auto; width: 100%;
   }
   /* iMessage-style bubbles */
   .msg { display: flex; flex-direction: column; max-width: 78%; margin-top: 6px; }
@@ -257,7 +257,7 @@ CHAT_HTML = """<!doctype html>
     border-top: 0.5px solid var(--separator);
   }
   .input-wrap {
-    max-width: 760px; margin: 0 auto;
+    max-width: 1100px; margin: 0 auto;
     display: flex; gap: 8px; align-items: flex-end;
     background: var(--panel2);
     border: 1px solid var(--separator);
