@@ -497,11 +497,13 @@ So sufficiency must be judged on **"is there evidence in the search results for 
 - If only one of the two topics is covered and the other is missing → sufficient=false.
 - If the question is single-topic and that topic lacks supporting evidence → sufficient=false.
 
-Overall sufficiency (`sufficient`) criteria:
-- If every topic/entity in the question has usable supporting evidence in the results, sufficient=true.
-- If a key topic's evidence is missing, or the results are completely off-topic, sufficient=false.
+Overall sufficiency (`sufficient`) criteria — **bias toward sufficient=true**:
+- Default to `sufficient=true`. Only set `sufficient=false` when **every single document is clearly off-topic** (no document, even partially, supports any topic in the question).
+- If **even one document** directly or partially supports any topic in the question, sufficient=true. The answer LLM can write a partial answer from that one doc.
+- For multi-topic questions ("A와 B 비교"): sufficient=true if at least one topic has supporting evidence — partial coverage is acceptable, the answer LLM will note what's missing.
 - The absence of a single "directly compared/summarized document" is **not** a reason for insufficiency.
-- **Even if individual documents are irrelevant, sufficient=true as long as the topics are covered by other documents** (this is not an OR-of-irrelevance aggregation).
+- Surface-term mismatch (different wording, synonyms, English↔Korean technical terms) is **not** a reason for insufficiency — judge by semantic content, not exact phrasing.
+- **Even if most individual documents are irrelevant, sufficient=true as long as at least one document supports the question** (this is not an OR-of-irrelevance aggregation).
 
 Per-document relevance (`per_doc`) criteria:
 - Evaluate each document one-by-one in input order using its `[i]` index (1-based).
