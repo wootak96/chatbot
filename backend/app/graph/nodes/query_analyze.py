@@ -42,10 +42,11 @@ _DOMAIN_PATTERN = re.compile(
 _INTERNAL_PATTERN = re.compile(
     r"(?i)("
     # HMG cloud platforms / internal products
-    r"hmgcloud|hcloud|hmgsearch|vaatz|evplatform|"
+    r"hmgcloud|hcloud|hmgsearch|vaatz|evplatform|kafkaadm|"
     # Internal acronyms — word boundaries reduce false positives on
     # substrings inside unrelated English text
     r"\bvdsp\b|\bdsp\b|\bota\b|\baip\b|\bpam\b|\bhae\b|"
+    r"\bhkmc\b|\bhmg\b|\bhchat\b|"
     # Internal locations (Korean, no boundary needed for CJK)
     r"상암|가산|광주|"
     # Team / industry context
