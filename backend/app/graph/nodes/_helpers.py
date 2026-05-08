@@ -108,14 +108,14 @@ def render_history(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def render_docs_brief(docs: list[dict]) -> str:
+def render_docs_brief(docs: list[dict], char_limit: int = 1000) -> str:
     if not docs:
         return "(검색된 문서 없음)"
     lines = []
     for i, d in enumerate(docs, 1):
         title = d.get("title", "")
         url = d.get("url", "")
-        excerpt = (d.get("content", "") or "")[:200].replace("\n", " ")
+        excerpt = (d.get("content", "") or "")[:char_limit].replace("\n", " ")
         lines.append(f"[{i}] {title} | {url}\n    {excerpt}")
     return "\n".join(lines)
 

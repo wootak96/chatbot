@@ -30,7 +30,11 @@ async def self_check(state: RAGState) -> dict:
 
     query = state.get("resolved_query") or state["current_query"]
     prompt = prompts.SELF_CHECK.format(
-        query=query, docs=render_docs_brief(candidates)
+        query=query,
+        docs=render_docs_brief(
+            candidates,
+            char_limit=get_settings().self_check_doc_char_limit,
+        ),
     )
     data = await llm_json(get_judge_llm(), prompt)
     sufficient = bool(data.get("sufficient", False))

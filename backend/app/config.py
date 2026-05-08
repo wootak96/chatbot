@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     # actual answer body that was past the head section), at the cost of
     # input tokens. With top_k=10, total doc context ≈ char_limit × 10.
     generate_doc_char_limit: int = 5000
+    # Per-doc excerpt shown to the self_check sufficiency judge. Smaller
+    # than `generate_doc_char_limit` because the judge only needs enough
+    # text to decide topical coverage, not write the answer. The previous
+    # 200-char default was too narrow — confluence pages whose head 200
+    # chars are menus / TOC produced false `sufficient=false` verdicts
+    # even when rank-1 was the correct doc.
+    self_check_doc_char_limit: int = 1000
 
     max_history_turns: int = 5
 
