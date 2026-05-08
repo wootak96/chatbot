@@ -378,6 +378,12 @@ Available indices:
     조직/도메인 — 클라우드솔루션, 완성차
     사내 ES 네임스페이스 경로 — /es_engine, /es_log, /es_data
     이런 단어들은 외부 공개 문서에는 등장하지 않으므로 일반 acronym (예: "DSP" = "Digital Signal Processing")으로 해석하지 말 것.
+  - **사내 운영 상태/장애 이력 질의 (이런 표현이 등장하면 항상 `confluence` 포함)**:
+    - "운영 중인 / 사용 중인 / 운용 중인 클러스터(또는 ES/Kafka)" — 우리가 실제로 굴리는 시스템 정보를 묻는 것.
+    - "현재 운영 / 현재 쓰고 있는" — 현재 사내 환경에 대한 질의.
+    - "클러스터 현황 / 상태 / 이력 / 장애" — 사내 클러스터의 상태/이력 추적.
+    - "장애 이력 / 장애 발생 / 장애 났던 / 장애 있었던" — 과거 사내 장애 사례.
+    이런 질의는 공식문서에 답이 없고 사내 위키에만 정리되어 있으므로, 기술 키워드(ES/Kafka)와 함께 등장해도 `confluence`를 반드시 포함한다.
 
 Routing guidance:
 - If the question clearly belongs to ONE index only, pick that one.

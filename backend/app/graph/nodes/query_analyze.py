@@ -52,7 +52,16 @@ _INTERNAL_PATTERN = re.compile(
     # Team / industry context
     r"클라우드솔루션|완성차|"
     # ES path namespaces (leading slash distinguishes from generic words)
-    r"/es_engine|/es_log|/es_data"
+    r"/es_engine|/es_log|/es_data|"
+    # Internal operational-state context — phrases implying "OUR
+    # clusters / OUR systems" (running, in-use, prior incidents). Such
+    # info lives only in the internal wiki, never in public docs, so
+    # confluence MUST be in the routing. Public-tech indices may still
+    # be added by the LLM if a tech keyword (ES/Kafka) also appears.
+    r"운영\s*중인|사용\s*중인|운용\s*중인|"
+    r"현재\s*(운영|사용|쓰고)|"
+    r"클러스터\s*(현황|상태|이력|장애)|"
+    r"장애\s*(이력|기록|발생|났|났던|있었|있던)"
     r")"
 )
 
