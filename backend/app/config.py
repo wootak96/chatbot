@@ -56,14 +56,14 @@ class Settings(BaseSettings):
     # the BM25 query uses `lenient: true` so it's silently ignored there.
     es_field_ancestors_title: str = "ancestors.title"
 
-    retrieval_rank_window: int = 50
+    retrieval_rank_window: int = 100
     retrieval_rank_constant: int = 60
-    retrieval_top_k: int = 10
+    retrieval_top_k: int = 20
     retrieval_max_retry: int = 2
     # Per-doc body cap shown to the answer LLM. Bigger means more context
     # reaches the LLM (and longer pages have a chance to surface their
     # actual answer body that was past the head section), at the cost of
-    # input tokens. With top_k=10, total doc context ≈ char_limit × 10.
+    # input tokens. With top_k=20, total doc context ≈ char_limit × 20.
     generate_doc_char_limit: int = 5000
     # Per-doc excerpt shown to the self_check sufficiency judge. Smaller
     # than `generate_doc_char_limit` because the judge only needs enough
