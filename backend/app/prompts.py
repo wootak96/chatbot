@@ -369,7 +369,12 @@ Available indices:
     - 이런 토픽은 공식문서에 일반적인 절차가, 사내 위키에 사내 클러스터 맞춤 절차가 동시에 존재할 수 있으므로 양쪽을 모두 검색해 recall을 확보한다.
   - **공식문서에는 거의 없는 토픽 → `confluence` 단독**:
     - ES 개요/입문, RRF·BM25·kNN 메커니즘 설명, 학습 자료, 도입 가이드, ES vs OpenSearch/Solr 비교, 검색 엔진 기초 등은 사내 위키에만 정리돼 있다.
-- "kafka": Apache Kafka official documentation, topics/partitions/consumers/producers/streams, **Kafka KIPs (Kafka Improvement Proposals)**, **Kafka release notes**, **JIRA issue tracker**, **Sarama Go client**, **Confluent Schema Registry**, **librdkafka C client**, **Amazon MSK developer guide**, etc.
+- "kafka": Apache Kafka 공식문서. **Kafka 관련 질문은 기본적으로 모두 `kafka` 단독으로 라우팅한다** — 컨슈머/프로듀서/토픽/파티션/오프셋/컨슈머 그룹/스트림즈 등 메커니즘/개념 설명도 포함. Kafka는 ES와 달리 공식문서가 개념·운영 양쪽 모두의 1차 소스이므로 Confluence로 분기하지 않는다.
+  - 포함 범위: REST/admin API, 브로커·컨슈머·프로듀서 운영, 메커니즘 설명, 개념·입문, KIPs, 릴리즈 노트, JIRA 이슈, Sarama Go, Confluent Schema Registry, librdkafka, Amazon MSK
+  - **Kafka 질문에 `confluence`를 추가하는 경우는 다음뿐**:
+    1. 사내 맥락이 명시 ("사내", "우리", "팀", "내부 클러스터", "운영 중인 Kafka", "장애 났던 Kafka")
+    2. 사내 고유명사 동반 (kafkaadm 등)
+    이외에는 Kafka 질문에 `confluence`를 절대 포함하지 말 것.
 - "confluence": 사내 Confluence 위키 문서. **사내 운영 가이드 / 회의록 / 장애 대응 / 인수인계 / 사내 표준·정책 / 팀 위키 / 사내 프로젝트 메모 / 한국어로 작성된 운영·관리 문서** 등. ES/Kafka 같은 기술 토픽이라도 "사내 운영", "사내 가이드", "회의록", "인수인계", "장애 대응 절차" 같은 사내 맥락이 함께 등장하면 confluence를 선택.
   - **사내 전용 고유명사 (이 단어가 등장하면 항상 `confluence` 포함)**:
     플랫폼/제품명 — Hmgcloud, hCloud, Hmgsearch, vaatz, evplatform, kafkaadm, hchat
@@ -391,7 +396,11 @@ Routing guidance:
   1. 4개 레퍼런스 토픽(REST API / 트러블슈팅 / 업그레이드 / 릴리즈 노트) → `elasticsearch` 단독
   2. 운영 토픽(노드 exclude/include, shard allocation, rolling restart, capacity, snapshot, monitoring, JVM 튜닝 등) → **`elasticsearch` + `confluence` 둘 다** (양쪽에 자료가 있을 수 있으므로 recall 확보)
   3. 개요·메커니즘·학습·비교(ES가 뭐야, RRF 동작, ES vs OpenSearch 등) → `confluence` 단독
-- **Kafka 토픽 규칙**: Kafka의 REST/admin API, 브로커·컨슈머·프로듀서 운영, 트러블슈팅, 업그레이드, 릴리즈 노트는 `kafka`로 라우팅. (Kafka는 ES와 달리 운영 토픽도 일반적으로 공식문서가 1차 소스이므로 그대로 `kafka`를 선호한다.) "운영 가이드"라는 표현이 등장해도 사내 맥락("사내", "우리", "팀", "내부 클러스터") 없으면 `kafka`로 보낸다.
+- **Kafka 라우팅 규칙 (단순)**:
+  - **모든 Kafka 질문은 기본 `kafka` 단독.** ES의 3계층 규칙을 Kafka에 적용하지 말 것 — Kafka는 공식문서가 개념/운영/레퍼런스 모두 커버한다.
+  - 컨슈머·프로듀서 동작, 토픽/파티션/오프셋, 메시지 보장, 컨슈머 그룹, 리밸런싱, 스트림즈, ksqlDB, 스키마 레지스트리, 트러블슈팅, 업그레이드, 릴리즈 노트 → 전부 `kafka` 단독.
+  - "Kafka가 뭐야", "컨슈머 그룹이 뭐야" 같은 개념/입문 질문도 `kafka` 단독 (ES와 다르게 confluence로 보내지 말 것).
+  - 사내 맥락("사내", "우리", "팀", "내부 클러스터", "운영 중인 Kafka", "장애 났던 Kafka") 또는 사내 고유명사(kafkaadm 등)가 함께 있을 때만 `kafka` + `confluence`.
 - If the question explicitly references BOTH a public technology (Elasticsearch/Kafka) AND an internal operational context ("사내 운영 가이드", "사내 장애 대응", "회의록", "인수인계"), pick both the relevant public index AND `confluence`.
 - If the question contains any HMG-internal proper noun listed above, ALWAYS include `confluence` in the result (alone, or together with `elasticsearch`/`kafka` when public-tech terms also appear).
 - If the question compares public domains (e.g., ES vs Kafka), pick both `elasticsearch` and `kafka`.
@@ -412,6 +421,13 @@ Routing guidance:
 - "ES 학습 자료 추천해줘" → `confluence` (학습 자료 — confluence 단독)
 - "ES vs OpenSearch 차이" → `confluence` (비교 — confluence 단독)
 - "사내 ES 클러스터 트러블슈팅" → `elasticsearch` + `confluence` (트러블슈팅 + 사내 맥락)
+- "Kafka가 뭐야?" → `kafka` (개념도 kafka 단독 — ES와 다름)
+- "컨슈머 그룹 어떻게 동작해?" → `kafka` (메커니즘도 kafka 단독)
+- "Kafka 토픽 파티션 늘리는 법" → `kafka` (운영도 kafka 단독)
+- "Kafka 메시지 보장 방식" → `kafka` (개념 — kafka 단독)
+- "Kafka 3.7 릴리즈 노트" → `kafka` (릴리즈 노트 — 단독)
+- "운영 중인 Kafka 클러스터 장애" → `kafka` + `confluence` (사내 클러스터 상태)
+- "kafkaadm 사용법" → `confluence` (사내 고유명사)
 
 Respond ONLY with JSON:
 {{"indices": ["elasticsearch", "kafka", "confluence"]}}
