@@ -1004,6 +1004,49 @@ async def test_query_analyze_re_search_requires_index_alias(stub_judge):
     assert "forced_indices" not in out
 
 
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_confluence_aliases(stub_judge):
+    """Confluence has multiple Korean variants — all should resolve to
+    'confluence'."""
+    stub_judge(
+        ['{"intent": "question"}'] * 6
+    )  # one per query below; LLM call is short-circuited by re_search regex anyway
+    cases = [
+        "confluence에서 검색해줘",
+        "컨플루언스에서 검색해줘",
+        "콘플루언스에서 검색해줘",
+        "컨플에서 검색해줘",
+        "콘플에서 검색해줘",
+        "사내 문서에서 검색해줘",
+    ]
+    for q in cases:
+        out = await query_analyze({"current_query": q, "messages": []})
+        assert out["intent"] == "re_search", f"{q!r} should be re_search"
+        assert out["forced_indices"] == ["confluence"], (
+            f"{q!r} should resolve to ['confluence']"
+        )
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_official_doc_phrasing(stub_judge):
+    """'es 공식문서', 'kafka 공식문서' — the base alias still triggers."""
+    stub_judge(['{"intent": "question"}'] * 3)
+    out1 = await query_analyze(
+        {"current_query": "es 공식문서에서 검색해줘", "messages": []}
+    )
+    assert out1["forced_indices"] == ["elasticsearch"]
+
+    out2 = await query_analyze(
+        {"current_query": "elasticsearch 공식문서에서 검색해줘", "messages": []}
+    )
+    assert out2["forced_indices"] == ["elasticsearch"]
+
+    out3 = await query_analyze(
+        {"current_query": "kafka 공식문서에서 검색해줘", "messages": []}
+    )
+    assert out3["forced_indices"] == ["kafka"]
+
+
 # ---------- re_search_setup node ----------
 
 @pytest.mark.asyncio

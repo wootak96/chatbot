@@ -114,6 +114,8 @@ _INDEX_ALIAS_PATTERNS: dict[str, re.Pattern[str]] = {
     # `(?<![a-zA-Z])es(?![a-zA-Z])` matches the abbreviation "es" with ASCII-
     # only boundaries — Python's `\b` is Unicode-aware and treats Korean as
     # word chars, so `\bes\b` would NOT fire inside "es랑" / "es에서".
+    # "공식문서" doesn't need its own alternative because the base alias
+    # ("elasticsearch" / "kafka" / "confluence") will match the substring.
     "elasticsearch": re.compile(
         r"(?i)(elasticsearch_docs|elasticsearch|엘라스틱서치|엘라스틱|"
         r"(?<![a-zA-Z])es(?![a-zA-Z]))"
@@ -121,8 +123,13 @@ _INDEX_ALIAS_PATTERNS: dict[str, re.Pattern[str]] = {
     "kafka": re.compile(
         r"(?i)(kafka_docs|kafka|카프카)"
     ),
+    # Confluence has several Korean variants the user explicitly wants
+    # recognized: typo "콘플루언스" (oh vs eo), shortened "컨플" / "콘플",
+    # and the generic "사내 문서" / "사내 위키" framings.
     "confluence": re.compile(
-        r"(?i)(confluence_docs|confluence|컨플루언스|사내\s*위키|사내\s*문서)"
+        r"(?i)(confluence_docs|confluence|"
+        r"컨플루언스|콘플루언스|컨플|콘플|"
+        r"사내\s*위키|사내\s*문서)"
     ),
 }
 

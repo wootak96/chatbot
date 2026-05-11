@@ -446,6 +446,7 @@ _NODE_NAMES = {
     "general_chat",
     "debug_explain",
     "instruction_save",
+    "re_search_setup",
 }
 
 
