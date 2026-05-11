@@ -101,6 +101,50 @@ _DEBUG_STRONG = re.compile(
 )
 
 
+# Force-reroute safety net. Triggers when the user explicitly names a target
+# index alias AND a search-action verb in the same utterance — e.g.,
+# "confluence에서 검색해줘", "kafka_docs에서 다시 찾아줘".
+# This intent reuses the immediately prior turn's BM25/semantic queries but
+# overrides the routed indices with what the user just named. Without the
+# action verb, "confluence에 뭐 있어?" is a normal question, not a re-search.
+_RESEARCH_ACTION = re.compile(
+    r"(다시\s*)?(검색|찾아|조회)"
+)
+_INDEX_ALIAS_PATTERNS: dict[str, re.Pattern[str]] = {
+    # `(?<![a-zA-Z])es(?![a-zA-Z])` matches the abbreviation "es" with ASCII-
+    # only boundaries — Python's `\b` is Unicode-aware and treats Korean as
+    # word chars, so `\bes\b` would NOT fire inside "es랑" / "es에서".
+    "elasticsearch": re.compile(
+        r"(?i)(elasticsearch_docs|elasticsearch|엘라스틱서치|엘라스틱|"
+        r"(?<![a-zA-Z])es(?![a-zA-Z]))"
+    ),
+    "kafka": re.compile(
+        r"(?i)(kafka_docs|kafka|카프카)"
+    ),
+    "confluence": re.compile(
+        r"(?i)(confluence_docs|confluence|컨플루언스|사내\s*위키|사내\s*문서)"
+    ),
+}
+
+
+def _parse_target_aliases(text: str) -> list[str]:
+    """Extract index aliases the user named (e.g., ['confluence', 'kafka'])."""
+    if not text:
+        return []
+    return [a for a, pat in _INDEX_ALIAS_PATTERNS.items() if pat.search(text)]
+
+
+def _is_research_query(text: str) -> tuple[bool, list[str]]:
+    """True + alias list when the message names at least one index AND a
+    search-action verb. False + [] otherwise."""
+    if not text or not _RESEARCH_ACTION.search(text):
+        return False, []
+    aliases = _parse_target_aliases(text)
+    if not aliases:
+        return False, []
+    return True, aliases
+
+
 def _has_domain_term(text: str) -> bool:
     if not text:
         return False
@@ -143,13 +187,24 @@ async def query_analyze(state: RAGState) -> dict:
     data = await llm_json(get_judge_llm(), prompt)
 
     intent = data.get("intent") or "question"
-    if intent not in ("question", "chitchat", "general", "debugging", "instruction"):
+    if intent not in (
+        "question", "chitchat", "general", "debugging", "instruction", "re_search"
+    ):
         intent = "question"
 
+    forced_indices: list[str] = []
+
+    # Override 0: re_search wins when the user explicitly names indices AND
+    # uses a search-action verb. Detected by regex (deterministic) so it
+    # doesn't depend on the LLM recognizing the pattern.
+    is_research, aliases = _is_research_query(query)
+    if is_research:
+        intent = "re_search"
+        forced_indices = aliases
     # Override 1: debug pattern wins over everything else. Meta-questions
     # about a prior bot answer ("왜 답변이 이렇게 나왔어?", even when they
     # contain domain words) must reach `debug_explain`, not the search path.
-    if _is_debug_query(query):
+    elif _is_debug_query(query):
         intent = "debugging"
     # Override 2: domain/meta terms force `question` (existing safety net).
     # Instruction is preserved — directives like "Kafka 답변할 때는 영어 용어
@@ -160,7 +215,10 @@ async def query_analyze(state: RAGState) -> dict:
     ):
         intent = "question"
 
-    return {
+    update: dict = {
         "intent": intent,
         PROGRESS_KEY: f"🔍 질문 분석 중... (intent={intent})",
     }
+    if forced_indices:
+        update["forced_indices"] = forced_indices
+    return update

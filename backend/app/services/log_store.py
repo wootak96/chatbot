@@ -56,6 +56,7 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     },
                 },
             },
+            "forced_indices": {"type": "keyword"},
             "search_plans": {
                 "type": "object",
                 "properties": {

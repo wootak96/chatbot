@@ -958,3 +958,175 @@ async def test_generate_omits_block_when_no_user_md(
     # actual injected block (newline-prefixed) must be absent when there's
     # no saved md. The block format is "\n[사용자 지침]\n{md}\n".
     assert "\n[사용자 지침]\n" not in sent_prompt
+
+
+# ---------- re_search intent detection (query_analyze) ----------
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_detects_index_and_action(stub_judge):
+    """Confluence + 검색해줘 → re_search + forced_indices=['confluence']."""
+    stub_judge(['{"intent": "question"}'])  # LLM may say question; regex overrides
+    state = {"current_query": "confluence에서 검색해줘", "messages": []}
+    out = await query_analyze(state)
+    assert out["intent"] == "re_search"
+    assert out["forced_indices"] == ["confluence"]
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_detects_multiple_aliases(stub_judge):
+    stub_judge(['{"intent": "question"}'])
+    state = {
+        "current_query": "es랑 confluence에서 다시 찾아줘",
+        "messages": [],
+    }
+    out = await query_analyze(state)
+    assert out["intent"] == "re_search"
+    assert set(out["forced_indices"]) == {"elasticsearch", "confluence"}
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_requires_action_verb(stub_judge):
+    """Index alias alone (no 검색/찾아/조회) → not re_search."""
+    stub_judge(['{"intent": "question"}'])
+    state = {"current_query": "confluence에 뭐 있어?", "messages": []}
+    out = await query_analyze(state)
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_requires_index_alias(stub_judge):
+    """Action verb without a named index → not re_search, falls through."""
+    stub_judge(['{"intent": "question"}'])
+    state = {"current_query": "다시 검색해줘", "messages": []}
+    out = await query_analyze(state)
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
+
+
+# ---------- re_search_setup node ----------
+
+@pytest.mark.asyncio
+async def test_re_search_setup_refuses_without_user_id(monkeypatch):
+    from app.graph.nodes import re_search_setup as mod
+
+    out = await mod.re_search_setup(
+        {"forced_indices": ["confluence"], "user_id": "", "session_id": "s1"}
+    )
+    assert out["intent"] == "re_search"
+    assert "user_id" in out["final_answer"]
+    assert out["sufficient"] is False
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_refuses_without_session_id(monkeypatch):
+    from app.graph.nodes import re_search_setup as mod
+
+    out = await mod.re_search_setup(
+        {"forced_indices": ["confluence"], "user_id": "u1", "session_id": ""}
+    )
+    assert "session_id" in out["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_refuses_without_forced_indices(monkeypatch):
+    from app.graph.nodes import re_search_setup as mod
+
+    out = await mod.re_search_setup(
+        {"forced_indices": [], "user_id": "u1", "session_id": "s1"}
+    )
+    assert "인덱스" in out["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_refuses_when_no_prior_turn(monkeypatch):
+    from app.graph.nodes import re_search_setup as mod
+
+    async def fake_fetch(user_id, *, session_id, n, client=None):
+        return []
+
+    monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
+    out = await mod.re_search_setup(
+        {
+            "forced_indices": ["confluence"],
+            "user_id": "u1",
+            "session_id": "s1",
+        }
+    )
+    assert "직전" in out["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_hands_off_to_rewrite_with_new_indices(
+    monkeypatch,
+):
+    """re_search_setup populates sub_queries + target_indices_per_query for
+    each forced index, then hands off to query_rewrite (does NOT reuse the
+    prior turn's BM25/semantic strings — those were index-language-tuned)."""
+    from app.graph.nodes import re_search_setup as mod
+
+    prior_turn = {
+        "sub_queries": ["node exclude"],
+        "search_plans": [
+            {
+                "sub_query_idx": 0,
+                "sub_query": "node exclude",
+                "index": "elasticsearch_docs",
+                # English strings — these MUST NOT be reused when re-routing
+                # to confluence_docs (Korean corpus).
+                "bm25": "node exclude shard allocation",
+                "semantic": "how to exclude a node",
+            }
+        ],
+        "metadata_filters": {"source": "official"},
+        "resolved_query": "노드 익스클루드 방법",
+        "question": "노드 익스클루드 방법 알려줘",
+    }
+
+    async def fake_fetch(user_id, *, session_id, n, client=None):
+        return [prior_turn]
+
+    monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
+    out = await mod.re_search_setup(
+        {
+            "forced_indices": ["confluence", "kafka"],
+            "user_id": "u1",
+            "session_id": "s1",
+        }
+    )
+    # No intent overwrite — downstream nodes branch only on chitchat.
+    assert "intent" not in out
+    assert out["search_intent"] == "lookup"
+    assert out["sub_queries"] == ["node exclude"]
+    # target_indices_per_query is what query_rewrite (the next node) reads.
+    assert out["target_indices_per_query"] == [
+        ["confluence_docs", "kafka_docs"]
+    ]
+    # IMPORTANT: search_plans must NOT be set — query_rewrite will produce
+    # them with fresh, index-language-aware BM25/semantic strings.
+    assert "search_plans" not in out
+    # metadata_filters & resolved_query are preserved verbatim.
+    assert out["metadata_filters"] == {"source": "official"}
+    assert out["resolved_query"] == "노드 익스클루드 방법"
+    assert out["retry_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_refuses_when_prior_turn_has_no_sub_queries(
+    monkeypatch,
+):
+    """Prior turn was chitchat/instruction/etc — no sub_queries to reuse."""
+    from app.graph.nodes import re_search_setup as mod
+
+    async def fake_fetch(user_id, *, session_id, n, client=None):
+        return [{"sub_queries": [], "search_plans": []}]
+
+    monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
+    out = await mod.re_search_setup(
+        {
+            "forced_indices": ["confluence"],
+            "user_id": "u1",
+            "session_id": "s1",
+        }
+    )
+    assert "서브쿼리" in out["final_answer"]

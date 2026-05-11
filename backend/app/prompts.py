@@ -28,6 +28,18 @@ Look at the conversation history and the current user question, and classify the
    • Trigger phrases: "왜 답변이 이렇게 나왔어?", "왜 이렇게 답했어?", "어떻게 그렇게 답했어?", "근거가 뭐야?", "어디서 나왔어?", "왜 이렇게 판단했어?", "이 답변 왜 이래?", "디버깅 모드", "방금 답변 어디서 가져왔어?"
    • Even when the question contains domain words like "Kafka 답변 왜 그래?" — if the user is questioning a PRIOR ANSWER (not asking for new info about Kafka), it is debugging.
    • Distinguishing rule: "X가 뭐야?" → question. "왜 X 답변이 그래?" → debugging.
+- "re_search": A directive to re-run the IMMEDIATELY PRIOR question's search against a different, user-named index set. The current message is NOT a fresh information request — it's "redo the previous search, this time on index X".
+   • Triggers ONLY when the message names a known index alias (`elasticsearch` / `kafka` / `confluence` and their Korean/abbrev forms) AND a search-action verb (`검색`, `찾아`, `조회`, optionally with `다시`).
+   • Examples (all → re_search):
+     - "confluence에서 검색해줘"
+     - "kafka에서 다시 찾아줘"
+     - "es랑 confluence 둘 다에서 다시 조회해줘"
+     - "사내 위키에서도 찾아봐"
+   • NOT re_search (→ question instead):
+     - "confluence에 뭐 있어?" (no search-action verb)
+     - "다시 검색해줘" (no index named)
+     - "ES와 Kafka 비교해줘" (no search-action targeting an index)
+   • A subsequent regex post-check enforces the alias+verb combination, but you should still emit `re_search` when the pattern is unambiguous.
 - "instruction": A directive about HOW the bot should answer FUTURE questions — answer style, tone, format preferences, persona — NOT a request for information itself.
    • Style/format: "앞으로 답변은 마크다운으로 해줘", "이모지 쓰지 마", "코드는 항상 ```블록으로 보여줘", "표로 정리해줘 (앞으로)", "출처는 마지막에 한 번만 보여줘"
    • Tone/persona: "친근한 말투로 대답해", "존댓말로 해줘", "반말로 해", "내가 신입이니까 쉽게 설명해줘", "한 문단으로 짧게"
@@ -57,7 +69,7 @@ Look at the conversation history and the current user question, and classify the
 - Words like "비교", "차이", "vs", "어떤 게 나아", "둘 중" combined with a domain word almost always indicate question.
 
 Respond ONLY with the following JSON object. No other text.
-{{"intent": "question|chitchat|general|debugging|instruction"}}
+{{"intent": "question|chitchat|general|debugging|instruction|re_search"}}
 
 [대화 히스토리]
 {history}

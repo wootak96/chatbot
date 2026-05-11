@@ -36,7 +36,9 @@ class SearchPlan(TypedDict, total=False):
     semantic: str  # semantic query (same per-index language policy)
 
 
-Intent = Literal["question", "chitchat", "general", "debugging", "instruction"]
+Intent = Literal[
+    "question", "chitchat", "general", "debugging", "instruction", "re_search"
+]
 SearchIntent = Literal["lookup", "count", "list"]
 
 
@@ -73,6 +75,11 @@ class RAGState(TypedDict, total=False):
     search_plans: list[SearchPlan]
     metadata_filters: dict[str, Any]
 
+    # Forced index aliases extracted from a `re_search` user query
+    # (e.g., "confluence에서 검색해줘" → ["confluence"]). Consumed by
+    # re_search_setup to override the prior turn's per-plan `index`.
+    forced_indices: list[str]
+
     # Retrieval
     candidates: list[Document]
     # Diagnostic-only: per-plan single-retriever results (title/url) so
@@ -106,6 +113,7 @@ def initial_state(
         candidates=[],
         bm25_only_results=[],
         semantic_only_results=[],
+        forced_indices=[],
         sub_queries=[],
         target_indices_per_query=[],
         search_plans=[],

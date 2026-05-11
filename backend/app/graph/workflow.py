@@ -49,6 +49,7 @@ from app.graph.nodes.query_decompose import query_decompose
 from app.graph.nodes.query_reform import query_reform
 from app.graph.nodes.query_rewrite import query_rewrite
 from app.graph.nodes.query_variate import query_variate
+from app.graph.nodes.re_search_setup import re_search_setup
 from app.graph.nodes.search_intent import search_intent
 from app.graph.nodes.self_check import self_check, should_retry
 from app.graph.state import RAGState
@@ -64,7 +65,18 @@ def _branch_from_analyze(state: RAGState) -> str:
         return "debugging"
     if intent == "instruction":
         return "instruction"
+    if intent == "re_search":
+        return "re_search"
     return "search"
+
+
+def _branch_from_re_search(state: RAGState) -> str:
+    """re_search_setup either populated sub_queries + target_indices_per_query
+    (→ continue to query_rewrite for fresh per-index rewrites) or emitted a
+    refusal message (→ end immediately)."""
+    if state.get("final_answer"):
+        return "end"
+    return "rewrite"
 
 
 def _branch_from_search_intent(state: RAGState) -> str:
@@ -95,6 +107,7 @@ def build_workflow():
     builder.add_node("general_chat", general_chat)
     builder.add_node("debug_explain", debug_explain)
     builder.add_node("instruction_save", instruction_save)
+    builder.add_node("re_search_setup", re_search_setup)
 
     builder.add_edge(START, "query_analyze")
     builder.add_conditional_edges(
@@ -105,7 +118,18 @@ def build_workflow():
             "general": "general_chat",
             "debugging": "debug_explain",
             "instruction": "instruction_save",
+            "re_search": "re_search_setup",
             "search": "query_reform",
+        },
+    )
+    builder.add_conditional_edges(
+        "re_search_setup",
+        _branch_from_re_search,
+        {
+            # Re-run query_rewrite so BM25/semantic strings are regenerated
+            # for the new forced indices (language differs per index).
+            "rewrite": "query_rewrite",
+            "end": END,
         },
     )
     builder.add_edge("query_reform", "search_intent")
