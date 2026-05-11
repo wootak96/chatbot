@@ -391,7 +391,7 @@ Available indices:
   - **사내 전용 고유명사 (이 단어가 등장하면 항상 `confluence` 포함)**:
     플랫폼/제품명 — Hmgcloud, hCloud, Hmgsearch, vaatz, evplatform, kafkaadm, hchat
     사내 약어 — DSP, vDSP, OTA, AIP, PAM, HAE, HKMC, HMG
-    사옥/지역 — 상암, 가산, 광주
+    사옥/지역 — 상암, 가산, 광주, 의왕
     조직/도메인 — 클라우드솔루션, 완성차
     사내 ES 네임스페이스 경로 — /es_engine, /es_log, /es_data
     이런 단어들은 외부 공개 문서에는 등장하지 않으므로 일반 acronym (예: "DSP" = "Digital Signal Processing")으로 해석하지 말 것.

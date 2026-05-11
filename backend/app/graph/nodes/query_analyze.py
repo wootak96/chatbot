@@ -48,7 +48,7 @@ _INTERNAL_PATTERN = re.compile(
     r"\bvdsp\b|\bdsp\b|\bota\b|\baip\b|\bpam\b|\bhae\b|"
     r"\bhkmc\b|\bhmg\b|\bhchat\b|"
     # Internal locations (Korean, no boundary needed for CJK)
-    r"상암|가산|광주|"
+    r"상암|가산|광주|의왕|"
     # Team / industry context
     r"클라우드솔루션|완성차|"
     # ES path namespaces (leading slash distinguishes from generic words)
