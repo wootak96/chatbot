@@ -162,6 +162,110 @@ async def hybrid_search(
     return [_hit_to_document(hit, settings) for hit in hits]
 
 
+def _build_single_retriever_query(
+    *,
+    retriever_kind: str,
+    bm25_query_text: str,
+    semantic_query_text: str,
+    settings: Settings,
+    metadata_filters: dict[str, Any] | None,
+    size: int | None,
+) -> dict[str, Any]:
+    """Build a search body that uses ONLY BM25 or ONLY semantic retrieval.
+
+    Used for diagnostic logging — chat_logs stores BM25-only and
+    semantic-only top results alongside the RRF-fused candidates so we can
+    see, post-hoc, where each fused doc came from.
+    """
+    s = settings
+    final_size = size or s.retrieval_top_k
+
+    if retriever_kind == "bm25":
+        bm25_fields: list[str] = []
+        if s.es_field_title:
+            bm25_fields.append(f"{s.es_field_title}^2")
+        if s.es_field_ancestors_title:
+            bm25_fields.append(f"{s.es_field_ancestors_title}^1.5")
+        bm25_fields.append(s.es_field_content)
+        if len(bm25_fields) == 1:
+            query: dict[str, Any] = {
+                "match": {bm25_fields[0]: {"query": bm25_query_text}}
+            }
+        else:
+            query = {
+                "multi_match": {
+                    "query": bm25_query_text,
+                    "fields": bm25_fields,
+                    "type": "best_fields",
+                    "lenient": True,
+                }
+            }
+    elif retriever_kind == "semantic":
+        query = {
+            "semantic": {
+                "field": s.es_field_semantic,
+                "query": semantic_query_text,
+            }
+        }
+    else:
+        raise ValueError(f"unknown retriever_kind: {retriever_kind!r}")
+
+    filter_clauses = _build_filter_clauses(metadata_filters or {})
+    if filter_clauses:
+        query = {"bool": {"must": [query], "filter": filter_clauses}}
+
+    return {
+        "query": query,
+        "size": final_size,
+        "_source": [
+            f for f in (
+                s.es_field_title,
+                s.es_field_content,
+                s.es_field_url,
+                "source",
+                "category",
+                "updated_at",
+            )
+            if f
+        ],
+    }
+
+
+async def single_retriever_search(
+    *,
+    retriever_kind: str,
+    bm25_query_text: str,
+    semantic_query_text: str | None = None,
+    indices: list[str],
+    metadata_filters: dict[str, Any] | None = None,
+    size: int | None = None,
+    client: AsyncElasticsearch | None = None,
+) -> list[dict[str, Any]]:
+    """Run a BM25-only or semantic-only search for diagnostic logging.
+
+    Returns the same document shape as `hybrid_search` so callers can log
+    title/url uniformly. Errors return [] — diagnostic logging must never
+    block the main RAG flow.
+    """
+    settings = get_settings()
+    sem_text = semantic_query_text if semantic_query_text else bm25_query_text
+    body = _build_single_retriever_query(
+        retriever_kind=retriever_kind,
+        bm25_query_text=bm25_query_text,
+        semantic_query_text=sem_text,
+        settings=settings,
+        metadata_filters=metadata_filters,
+        size=size,
+    )
+    es = client or get_es_client()
+    try:
+        response = await es.search(index=",".join(indices), body=body)
+    except Exception:
+        return []
+    hits = response.get("hits", {}).get("hits", [])
+    return [_hit_to_document(hit, settings) for hit in hits]
+
+
 async def count_documents(
     *,
     indices: list[str],

@@ -329,6 +329,8 @@ def _build_log_doc(
             }
             for i, d in enumerate(candidates, 1)
         ],
+        "bm25_only_results": final_state.get("bm25_only_results") or [],
+        "semantic_only_results": final_state.get("semantic_only_results") or [],
         "sufficient": bool(final_state.get("sufficient", False)),
         "sufficiency_reason": final_state.get("sufficiency_reason") or "",
         "retry_count": int(final_state.get("retry_count", 0) or 0),

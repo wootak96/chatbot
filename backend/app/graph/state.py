@@ -75,6 +75,12 @@ class RAGState(TypedDict, total=False):
 
     # Retrieval
     candidates: list[Document]
+    # Diagnostic-only: per-plan single-retriever results (title/url) so
+    # chat_logs can show where each RRF-fused doc came from. Each entry is
+    # a dict with `index`, `sub_query`, `bm25` query text, `semantic` query
+    # text, and a `hits` list of {title, url, score} top documents.
+    bm25_only_results: list[dict[str, Any]]
+    semantic_only_results: list[dict[str, Any]]
 
     # Control
     retry_count: int
@@ -98,6 +104,8 @@ def initial_state(
         session_id=session_id,
         retry_count=0,
         candidates=[],
+        bm25_only_results=[],
+        semantic_only_results=[],
         sub_queries=[],
         target_indices_per_query=[],
         search_plans=[],

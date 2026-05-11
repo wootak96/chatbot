@@ -75,6 +75,40 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     "used": {"type": "boolean"},
                 },
             },
+            "bm25_only_results": {
+                "type": "object",
+                "properties": {
+                    "sub_query": {"type": "keyword"},
+                    "index": {"type": "keyword"},
+                    "bm25": {"type": "text"},
+                    "hits": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "keyword"},
+                            "url": {"type": "keyword"},
+                            "score": {"type": "float"},
+                            "index": {"type": "keyword"},
+                        },
+                    },
+                },
+            },
+            "semantic_only_results": {
+                "type": "object",
+                "properties": {
+                    "sub_query": {"type": "keyword"},
+                    "index": {"type": "keyword"},
+                    "semantic": {"type": "text"},
+                    "hits": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "keyword"},
+                            "url": {"type": "keyword"},
+                            "score": {"type": "float"},
+                            "index": {"type": "keyword"},
+                        },
+                    },
+                },
+            },
             "sufficient": {"type": "boolean"},
             "sufficiency_reason": {"type": "text"},
             "retry_count": {"type": "integer"},

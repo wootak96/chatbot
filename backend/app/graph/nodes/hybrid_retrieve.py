@@ -5,17 +5,27 @@ import asyncio
 from app.graph.nodes import PROGRESS_KEY
 from app.graph.nodes._helpers import doc_dedup_key, doc_label
 from app.graph.state import RAGState, SearchPlan
-from app.services.elasticsearch_client import hybrid_search
+from app.services.elasticsearch_client import (
+    hybrid_search,
+    single_retriever_search,
+)
 
 
 async def hybrid_retrieve(state: RAGState) -> dict:
     if state.get("intent") == "chitchat":
-        return {"candidates": [], PROGRESS_KEY: ""}
+        return {
+            "candidates": [],
+            "bm25_only_results": [],
+            "semantic_only_results": [],
+            PROGRESS_KEY: "",
+        }
 
     plans: list[SearchPlan] = state.get("search_plans") or []
     if not plans:
         return {
             "candidates": [],
+            "bm25_only_results": [],
+            "semantic_only_results": [],
             PROGRESS_KEY: "📚 검색 계획 없음 — 검색 스킵",
         }
 
@@ -26,15 +36,39 @@ async def hybrid_retrieve(state: RAGState) -> dict:
         sem = p.get("semantic") or bm25
         index = p.get("index") or ""
         if not index or not bm25:
-            return []
-        return await hybrid_search(
-            bm25_query_text=bm25,
-            semantic_query_text=sem,
-            indices=[index],
-            metadata_filters=metadata,
+            return [], [], []
+        # Run RRF + BM25-only + semantic-only in parallel. The two single-
+        # retriever calls are diagnostic only — their hits go to chat_logs
+        # so we can see which retriever surfaced each fused doc. They never
+        # feed back into the candidate pool.
+        rrf_hits, bm25_hits, sem_hits = await asyncio.gather(
+            hybrid_search(
+                bm25_query_text=bm25,
+                semantic_query_text=sem,
+                indices=[index],
+                metadata_filters=metadata,
+            ),
+            single_retriever_search(
+                retriever_kind="bm25",
+                bm25_query_text=bm25,
+                semantic_query_text=sem,
+                indices=[index],
+                metadata_filters=metadata,
+            ),
+            single_retriever_search(
+                retriever_kind="semantic",
+                bm25_query_text=bm25,
+                semantic_query_text=sem,
+                indices=[index],
+                metadata_filters=metadata,
+            ),
         )
+        return rrf_hits, bm25_hits, sem_hits
 
-    results = await asyncio.gather(*[_search(p) for p in plans])
+    triples = await asyncio.gather(*[_search(p) for p in plans])
+    results = [t[0] for t in triples]
+    bm25_only_per_plan = [t[1] for t in triples]
+    semantic_only_per_plan = [t[2] for t in triples]
 
     seen: set[str] = set()
     merged: list[dict] = []
@@ -60,8 +94,40 @@ async def hybrid_retrieve(state: RAGState) -> dict:
             labels.append(label)
     labels_block = "\n" + "\n".join(f"  • {t}" for t in labels) if labels else ""
 
+    def _trim_hits(hits: list[dict]) -> list[dict]:
+        return [
+            {
+                "title": h.get("title", ""),
+                "url": h.get("url", ""),
+                "score": float(h.get("score", 0.0) or 0.0),
+                "index": h.get("index", ""),
+            }
+            for h in hits
+        ]
+
+    bm25_only_results = [
+        {
+            "sub_query": p.get("sub_query", ""),
+            "index": p.get("index", ""),
+            "bm25": p.get("bm25", ""),
+            "hits": _trim_hits(hits),
+        }
+        for p, hits in zip(plans, bm25_only_per_plan)
+    ]
+    semantic_only_results = [
+        {
+            "sub_query": p.get("sub_query", ""),
+            "index": p.get("index", ""),
+            "semantic": p.get("semantic", ""),
+            "hits": _trim_hits(hits),
+        }
+        for p, hits in zip(plans, semantic_only_per_plan)
+    ]
+
     return {
         "candidates": merged,
+        "bm25_only_results": bm25_only_results,
+        "semantic_only_results": semantic_only_results,
         PROGRESS_KEY: (
             f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)"
             f"{labels_block}"
