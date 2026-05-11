@@ -1066,6 +1066,7 @@ async def test_re_search_setup_hands_off_to_rewrite_with_new_indices(
     from app.graph.nodes import re_search_setup as mod
 
     prior_turn = {
+        "intent": "question",
         "sub_queries": ["node exclude"],
         "search_plans": [
             {
@@ -1112,14 +1113,20 @@ async def test_re_search_setup_hands_off_to_rewrite_with_new_indices(
 
 
 @pytest.mark.asyncio
-async def test_re_search_setup_refuses_when_prior_turn_has_no_sub_queries(
+async def test_re_search_setup_refuses_when_no_original_question_turn(
     monkeypatch,
 ):
-    """Prior turn was chitchat/instruction/etc — no sub_queries to reuse."""
+    """Lookback contains only chitchat/instruction/re_search turns — no
+    original `question` turn → refuse."""
     from app.graph.nodes import re_search_setup as mod
 
     async def fake_fetch(user_id, *, session_id, n, client=None):
-        return [{"sub_queries": [], "search_plans": []}]
+        return [
+            {"intent": "chitchat", "sub_queries": []},
+            {"intent": "instruction", "sub_queries": []},
+            # An incomplete re_search turn (no sub_queries saved)
+            {"intent": "re_search", "sub_queries": []},
+        ]
 
     monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
     out = await mod.re_search_setup(
@@ -1129,4 +1136,83 @@ async def test_re_search_setup_refuses_when_prior_turn_has_no_sub_queries(
             "session_id": "s1",
         }
     )
-    assert "서브쿼리" in out["final_answer"]
+    assert "원본" in out["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_walks_back_past_re_search_turns(monkeypatch):
+    """A chain of re_search turns should always point back to the ORIGINAL
+    question turn, not to the most recent re_search turn. Stable chaining."""
+    from app.graph.nodes import re_search_setup as mod
+
+    # Lookback newest-first: most recent two are re_search turns, then the
+    # original question turn deeper in history.
+    async def fake_fetch(user_id, *, session_id, n, client=None):
+        return [
+            {
+                "intent": "re_search",
+                "sub_queries": ["node exclude"],
+                "metadata_filters": {},
+                "resolved_query": "노드 익스클루드 방법",
+            },
+            {
+                "intent": "re_search",
+                "sub_queries": ["node exclude"],
+                "metadata_filters": {},
+                "resolved_query": "노드 익스클루드 방법",
+            },
+            {
+                "intent": "question",
+                "sub_queries": ["node exclude"],
+                "metadata_filters": {"source": "official"},
+                "resolved_query": "노드 익스클루드 방법",
+                "question": "노드 익스클루드 방법 알려줘",
+            },
+        ]
+
+    monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
+    out = await mod.re_search_setup(
+        {
+            "forced_indices": ["elasticsearch"],
+            "user_id": "u1",
+            "session_id": "s1",
+        }
+    )
+    # Walked past two re_search turns, found the question turn. Filters
+    # come from the original turn (not the empty filters of the re_searches).
+    assert out["sub_queries"] == ["node exclude"]
+    assert out["metadata_filters"] == {"source": "official"}
+    assert out["target_indices_per_query"] == [["elasticsearch_docs"]]
+
+
+@pytest.mark.asyncio
+async def test_re_search_setup_skips_when_top_turn_is_question_with_empty_subs(
+    monkeypatch,
+):
+    """A question turn that somehow saved empty sub_queries should be
+    skipped — keep walking until a usable question turn is found."""
+    from app.graph.nodes import re_search_setup as mod
+
+    async def fake_fetch(user_id, *, session_id, n, client=None):
+        return [
+            # Bad/empty question turn at the top
+            {"intent": "question", "sub_queries": []},
+            # Real question turn deeper
+            {
+                "intent": "question",
+                "sub_queries": ["RRF"],
+                "metadata_filters": {},
+                "resolved_query": "RRF 동작",
+            },
+        ]
+
+    monkeypatch.setattr(mod, "fetch_recent_turns", fake_fetch)
+    out = await mod.re_search_setup(
+        {
+            "forced_indices": ["kafka"],
+            "user_id": "u1",
+            "session_id": "s1",
+        }
+    )
+    assert out["sub_queries"] == ["RRF"]
+    assert out["resolved_query"] == "RRF 동작"

@@ -1,5 +1,5 @@
-"""Force-reroute node — re-runs the prior turn's search against user-named
-indices.
+"""Force-reroute node — re-runs the ORIGINAL question's search against
+user-named indices.
 
 Triggered when query_analyze sees a phrase like "confluence에서 검색해줘"
 that combines a known index alias with a search-action verb. The current
@@ -7,8 +7,14 @@ user message itself is NOT a new question — it's a directive to redo the
 prior question's search on a different index set.
 
 Flow:
-  1. Fetch the most recent stored turn from chat_logs (user_id + session_id).
-  2. Pull its `sub_queries` and the original `resolved_query`/`metadata_filters`.
+  1. Fetch up to N recent turns from chat_logs (user_id + session_id),
+     newest first.
+  2. Walk back past any `re_search` / chitchat / instruction / debugging /
+     general turns to find the most recent **original `question` turn**
+     with non-empty sub_queries. This means a chain of re_search turns
+     ("kafka에서 검색" → "confluence에서 검색" → "es에서 검색") always
+     reuses the SAME original sub_queries — the chain doesn't drift even
+     when an intermediate re_search turn somehow saved empty sub_queries.
   3. Set `target_indices_per_query` so every prior sub_query routes to the
      user-named indices instead of the LLM-decided ones.
   4. Hand off to query_rewrite — NOT directly to hybrid_retrieve. The prior
@@ -28,6 +34,24 @@ from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
 from app.graph.state import RAGState
 from app.services.log_store import fetch_recent_turns
+
+
+# How many recent turns to scan when walking back for the original question.
+# Generous enough that long re_search chains can still reach the source.
+_LOOKBACK_TURNS = 20
+
+
+def _find_original_question_turn(turns: list[dict]) -> dict | None:
+    """Walk newest-first and return the most recent `question` turn with a
+    non-empty sub_queries list. Skips re_search / chitchat / general /
+    debugging / instruction turns. None when nothing qualifies."""
+    for t in turns:
+        if t.get("intent") != "question":
+            continue
+        if not t.get("sub_queries"):
+            continue
+        return t
+    return None
 
 
 def _refusal(message: str, progress_tail: str) -> dict:
@@ -74,20 +98,23 @@ async def re_search_setup(state: RAGState) -> dict:
             "인덱스 alias 매칭 실패",
         )
 
-    turns = await fetch_recent_turns(user_id, session_id=session_id, n=1)
+    turns = await fetch_recent_turns(
+        user_id, session_id=session_id, n=_LOOKBACK_TURNS
+    )
     if not turns:
         return _refusal(
             "현재 세션에 직전 검색 기록이 없어 재검색할 대상을 찾지 못했습니다.",
             "직전 턴 없음",
         )
-    prev = turns[0]
-    prev_sub_queries = prev.get("sub_queries") or []
-    if not prev_sub_queries:
+    prev = _find_original_question_turn(turns)
+    if prev is None:
         return _refusal(
-            "직전 턴이 검색 흐름이 아니어서 재라우팅할 서브쿼리가 없습니다 "
-            "(이전 메시지가 일반 대화/지침/디버깅 이었을 수 있습니다).",
-            "직전 턴이 검색이 아님",
+            "현재 세션에 재라우팅할 원본 검색 질문이 없습니다 "
+            "(이전 메시지들이 일반 대화/지침/디버깅 이었거나, 검색 흐름에서 "
+            "서브쿼리가 만들어지지 않았을 수 있습니다).",
+            "원본 question 턴 없음",
         )
+    prev_sub_queries = prev.get("sub_queries") or []
 
     # Build target_indices_per_query so each prior sub_query routes to the
     # full forced-index set. query_rewrite (next node) will then produce a
