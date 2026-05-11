@@ -170,10 +170,20 @@ def chat_logs_index_name() -> str:
 async def ensure_log_index(
     *, client: AsyncElasticsearch | None = None
 ) -> str:
-    """Idempotently create the shared chat-logs index.
+    """Idempotently create the shared chat-logs index AND reconcile its
+    mapping when the index already exists.
 
     Returns the resolved index name (empty string when the setting is blank
-    so the caller can short-circuit)."""
+    so the caller can short-circuit).
+
+    Mapping reconciliation: when we add new fields to `_LOG_INDEX_MAPPING`
+    (e.g., `bm25_only_results`, `forced_indices`), an existing index won't
+    pick them up automatically — Elasticsearch never updates a live mapping
+    via `indices.create`. We call `indices.put_mapping` on every startup so
+    new fields are added in-place. Adding fields is non-destructive and
+    cheap; ES rejects only attempts to MODIFY an existing field's type,
+    which our mapping never does.
+    """
     name = chat_logs_index_name()
     if not name:
         return ""
@@ -182,6 +192,11 @@ async def ensure_log_index(
         exists = await es.indices.exists(index=name)
         if not exists:
             await es.indices.create(index=name, body=_LOG_INDEX_MAPPING)
+        else:
+            await es.indices.put_mapping(
+                index=name,
+                body=_LOG_INDEX_MAPPING["mappings"],
+            )
     except Exception as e:
         logger.warning("ensure_log_index(%s) failed: %s", name, e)
     return name
