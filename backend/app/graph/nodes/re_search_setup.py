@@ -126,6 +126,15 @@ async def re_search_setup(state: RAGState) -> dict:
     ]
     resolved_query = prev.get("resolved_query") or prev.get("question") or ""
 
+    # Multi-line progress block so the UI clearly shows what's being
+    # re-routed (original question) and where (resolved index names).
+    progress = (
+        "🔁 강제 재검색\n"
+        f"   • 원본 질문: {resolved_query or '(없음)'}\n"
+        f"   • 서브쿼리: {', '.join(prev_sub_queries)}\n"
+        f"   • 재라우팅 대상 인덱스: {', '.join(resolved_targets)}"
+    )
+
     return {
         # Keep intent="re_search" so chat_logs records the original intent
         # for later inspection. hybrid_retrieve / self_check / generate only
@@ -139,8 +148,5 @@ async def re_search_setup(state: RAGState) -> dict:
         "metadata_filters": prev.get("metadata_filters") or {},
         "resolved_query": resolved_query,
         "retry_count": 0,
-        PROGRESS_KEY: (
-            "🔁 강제 재검색 — 직전 질문을 다음 인덱스로 재라우팅: "
-            + ", ".join(forced)
-        ),
+        PROGRESS_KEY: progress,
     }

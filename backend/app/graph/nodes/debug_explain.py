@@ -45,6 +45,7 @@ def _render_turns(turns: list[dict]) -> str:
         target_indices = t.get("target_indices") or []
         index_routing = t.get("index_routing") or []
         metadata_filters = t.get("metadata_filters") or {}
+        forced_indices = t.get("forced_indices") or []
         plans = t.get("search_plans") or []
         candidates = t.get("candidates") or []
         sufficient = t.get("sufficient")
@@ -58,6 +59,10 @@ def _render_turns(turns: list[dict]) -> str:
             f"intent: {intent} | search_intent: {search_intent}"
             + (f" | retry_count: {retry_count}" if retry_count else ""),
         ]
+        if forced_indices:
+            lines.append(
+                f"forced_indices (re_search 사용자 지정): {forced_indices}"
+            )
         if sub_queries:
             lines.append(f"sub_queries: {sub_queries}")
         if index_routing:
