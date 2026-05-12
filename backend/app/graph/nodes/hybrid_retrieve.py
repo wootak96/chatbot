@@ -95,14 +95,16 @@ async def hybrid_retrieve(state: RAGState) -> dict:
     labels_block = "\n" + "\n".join(f"  • {t}" for t in labels) if labels else ""
 
     def _trim_hits(hits: list[dict]) -> list[dict]:
+        # Diagnostic dump for chat_logs: only the per-retriever rank
+        # (1-based position) plus title/url. Score is dropped — it's not
+        # comparable across BM25 and cosine and was noise for human review.
         return [
             {
+                "rank": i,
                 "title": h.get("title", ""),
                 "url": h.get("url", ""),
-                "score": float(h.get("score", 0.0) or 0.0),
-                "index": h.get("index", ""),
             }
-            for h in hits
+            for i, h in enumerate(hits, 1)
         ]
 
     bm25_only_results = [

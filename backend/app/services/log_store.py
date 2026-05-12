@@ -96,10 +96,9 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     "hits": {
                         "type": "object",
                         "properties": {
+                            "rank": {"type": "integer"},
                             "title": {"type": "keyword"},
                             "url": {"type": "keyword"},
-                            "score": {"type": "float"},
-                            "index": {"type": "keyword"},
                         },
                     },
                 },
@@ -113,10 +112,9 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     "hits": {
                         "type": "object",
                         "properties": {
+                            "rank": {"type": "integer"},
                             "title": {"type": "keyword"},
                             "url": {"type": "keyword"},
-                            "score": {"type": "float"},
-                            "index": {"type": "keyword"},
                         },
                     },
                 },
