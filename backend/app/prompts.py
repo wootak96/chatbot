@@ -278,6 +278,7 @@ Produce TWO outputs:
      • Korean tech vocabulary: 컨슈머 → consumer, 프로듀서 → producer, 브로커 → broker, 파티션 → partition, 토픽 → topic, 인덱스 → index, 샤드 → shard, 매핑 → mapping, 클러스터 → cluster, 노드 → node, 레플리카 → replica, 임베딩 → embedding, 시맨틱 → semantic, 벡터 → vector
      • Abbreviations: ES → Elasticsearch, K8s → Kubernetes, kafka cg → Kafka consumer group, opensearch → OpenSearch (lowercase to canonical case)
    - Output as a single space-separated string.
+   - **PRESERVE date/time markers verbatim** when present in the input — they are search-defining content for meeting notes / incident reports / weekly reports, not stopwords. Examples: `2024-08-15`, `26/04/03`, `24.04.03`, `2026년 4월 3일`, `4월 첫째주`, `2024 Q3`, `8월 셋째주 회의록`. Keep the date token as-is alongside the topic nouns.
 2. "semantic"  — for semantic (vector) search. **A NOUN PHRASE that preserves the question's intent. NOT a hypothetical answer.**
    - Length: 4~12 tokens.
    - Allowed forms (English target):
@@ -292,6 +293,7 @@ Produce TWO outputs:
      • "X 운영 가이드", "X 절차"
    - **FORBIDDEN**: complete declarative sentences with a finite main verb that read like an answer. Do NOT write "X is …", "X provides …", "X uses …", "X는 …이다", "X는 …한다".
    - Fix typos. Normalize abbreviations the same way as keywords.
+   - **PRESERVE date/time markers** in the semantic phrase whenever the input has one — they uniquely identify a meeting note / incident log and must be searchable in the vector space. Examples: `"2024-08-15 Kafka 주간 회의록"`, `"26/04/03 Kafka 주간 회의 내용"`, `"2024 Q3 ES 운영 회고"`. Do NOT drop the date token even if it does not fit the canonical noun-phrase templates above.
 
 CRITICAL — strip synthesis verbs from the search query:
 The retrieval layer fetches evidence; the LLM does the synthesis afterwards. Words like 비교/차이/대비/vs/요약/정리/번역 (and English compare/difference/contrast/vs/summarize/translate) are LLM TASKS, not search subjects. Even if a sub-query still carries a synthesis verb (e.g. decompose was lenient), REWRITE it as a topic-level lookup of the FIRST or PRIMARY entity — never produce "differences between X and Y" or "comparison of X and Y" as a search query, because there is no "comparison document"; there are only documents about X and documents about Y. (Cross-entity sub-queries should already have been split by `query_decompose`; this is the safety net.)
@@ -329,7 +331,15 @@ The retrieval layer fetches evidence; the LLM does the synthesis afterwards. Wor
 9. target_index: confluence_docs
    Input: "RRF 회의록"
    Output: {{"keywords": "RRF 회의록", "semantic": "RRF 회의록 내용"}}
-10. target_index: elasticsearch_docs
+10. target_index: confluence_docs
+    Input: "26/04/03 kafka 주간 회의 정리해줘"
+    Output: {{"keywords": "26/04/03 Kafka 주간 회의", "semantic": "26/04/03 Kafka 주간 회의록 내용"}}
+    (Note: "정리해줘" is a synthesis verb — dropped. Date "26/04/03" is preserved verbatim in BOTH outputs because it identifies a specific meeting note. "kafka" → "Kafka" canonical case.)
+11. target_index: confluence_docs
+    Input: "2024-08-15 ES 클러스터 장애 보고"
+    Output: {{"keywords": "2024-08-15 Elasticsearch 클러스터 장애 보고", "semantic": "2024-08-15 Elasticsearch 클러스터 장애 보고서 내용"}}
+    (Date preserved; "ES" → "Elasticsearch" canonical.)
+12. target_index: elasticsearch_docs
     Input: "오픈서치랑 차이점이 뭐야?"
     Output: {{"keywords": "OpenSearch Elasticsearch differences", "semantic": "differences between OpenSearch and Elasticsearch"}}
     (Korean transliteration "오픈서치" → "OpenSearch". "차이점" itself is a synthesis verb but the sub-query already singled out OpenSearch as the topic, so search for the entity.)
