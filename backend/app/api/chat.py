@@ -329,6 +329,21 @@ def _build_log_doc(
             }
             for i, d in enumerate(candidates, 1)
         ],
+        # Pre-filtered view containing ONLY the candidates the answer
+        # actually cited. Workaround for `candidates` being indexed as
+        # `object` (parallel arrays flatten, so a `candidates.used == true`
+        # filter can't return per-doc sub-objects). Querying this field
+        # gives the cited docs directly without nested-query gymnastics.
+        "used_candidates": [
+            {
+                "id": d.get("id", ""),
+                "title": d.get("title", ""),
+                "url": d.get("url", ""),
+                "score": float(d.get("score", 0.0) or 0.0),
+            }
+            for i, d in enumerate(candidates, 1)
+            if i in cited_indices
+        ],
         "bm25_only_results": final_state.get("bm25_only_results") or [],
         "semantic_only_results": final_state.get("semantic_only_results") or [],
         "forced_indices": final_state.get("forced_indices") or [],

@@ -76,6 +76,17 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
                     "used": {"type": "boolean"},
                 },
             },
+            # Pre-filtered to only `used == true` entries from `candidates`.
+            # Query this field directly to get the docs the answer cited.
+            "used_candidates": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "keyword"},
+                    "title": {"type": "keyword"},
+                    "url": {"type": "keyword"},
+                    "score": {"type": "float"},
+                },
+            },
             "bm25_only_results": {
                 "type": "object",
                 "properties": {
