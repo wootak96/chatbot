@@ -81,10 +81,9 @@ _LOG_INDEX_MAPPING: dict[str, Any] = {
             "used_candidates": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "keyword"},
+                    "rank": {"type": "integer"},
                     "title": {"type": "keyword"},
                     "url": {"type": "keyword"},
-                    "score": {"type": "float"},
                 },
             },
             "bm25_only_results": {

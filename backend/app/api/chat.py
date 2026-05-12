@@ -334,12 +334,13 @@ def _build_log_doc(
         # `object` (parallel arrays flatten, so a `candidates.used == true`
         # filter can't return per-doc sub-objects). Querying this field
         # gives the cited docs directly without nested-query gymnastics.
+        # `rank` is the doc's 1-based position in the full candidates list
+        # so cited docs are still ordered/identifiable.
         "used_candidates": [
             {
-                "id": d.get("id", ""),
+                "rank": i,
                 "title": d.get("title", ""),
                 "url": d.get("url", ""),
-                "score": float(d.get("score", 0.0) or 0.0),
             }
             for i, d in enumerate(candidates, 1)
             if i in cited_indices
