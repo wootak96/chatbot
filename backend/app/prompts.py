@@ -124,6 +124,11 @@ REWRITE only when the current question contains one of these REFERENTIAL TRIGGER
 5b. A bare topic phrase ending in a topic marker (은/는/이/가) WITHOUT its own predicate
    - "리밸런싱은?", "벡터 차원수는?", "9버전은?", "사내 가이드는?"
    (the topic exists but the question/predicate must be inferred from history; fill the verb/intent from the prior turn)
+6. Distributive expansion from a prior assistant offer
+   - Current query contains a distributive marker: "버전별", "단계별", "유형별", "각각", "각 X마다", "X마다", "X별로", "모두", "하나씩", "전부"
+   - AND the immediately prior assistant turn enumerated specific items (e.g., "7.x, 8.x, 9.x", "snapshot·restore·monitoring", "TLS / API key / role 기반")
+   - → REWRITE by replacing the distributive marker with the explicit enumeration from the prior assistant turn, comma-separated. The downstream `query_decompose` will then split it.
+   - Use the prior turn's NUMBERING/LABELS verbatim — do not paraphrase the items.
 
 DO NOT REWRITE — return the input UNCHANGED:
 - The current question already names its own explicit topic/subject (e.g., "CPU alert 설정은 어떻게 해?" has "CPU alert 설정" as the topic — do NOT graft prior topic onto it).
@@ -175,6 +180,16 @@ Output a SINGLE Korean sentence (or the input verbatim if no trigger applies). D
    current: "BM25가 뭐야?"
    → "BM25가 뭐야?"
 
+9. (TRIGGER 6 — distributive "버전별" + prior assistant enumerated 7.x/8.x/9.x)
+   history: "사용자: ES 업그레이드 알려줘\\n어시스턴트: 원하시면 7.x, 8.x, 9.x 버전별 업그레이드 방법을 알려드릴 수 있습니다."
+   current: "버전별 업그레이드 방법 알려줘"
+   → "Elasticsearch 7.x, 8.x, 9.x 버전별 업그레이드 방법 알려줘"
+
+10. (TRIGGER 6 — distributive "각각" + prior assistant offered TLS / API key / role)
+    history: "사용자: ES 인증 옵션 뭐 있어?\\n어시스턴트: ES는 TLS, API key, role 기반 인증을 지원합니다."
+    current: "각각 어떻게 설정해?"
+    → "Elasticsearch TLS, API key, role 기반 인증 각각 설정 방법"
+
 Respond ONLY with this JSON. No other text.
 {{"reformed_query": "..."}}
 
@@ -199,6 +214,12 @@ The user may ask the LLM to **compare / contrast / diff / summarize / translate 
 - Strip the synthesis verb and decompose into one sub-query per underlying topic/entity.
 - NEVER produce a sub-query like "differences between X and Y" or "comparison of X and Y" — those are LLM tasks, not retrieval tasks.
 - If only ONE topic remains after stripping, return a single sub-query about that topic.
+
+CRITICAL — distributive enumerations are MULTIPLE topics, not one:
+When the query enumerates specific items with a distributive marker (e.g., "X 7.x, 8.x, 9.x 버전별 업그레이드 방법", "TLS, API key, role 각각 설정 방법", "consumer / producer / broker 각 운영 가이드"), produce ONE sub-query per enumerated item. Each item gets its own topic-level lookup.
+- Strip the distributive marker (별/별로/각각/마다/모두) — it's a list-spread instruction for the retrieval layer, not a search token.
+- Cap at 3 sub-queries; if the enumeration has more than 3, keep the 3 most representative.
+- If the enumeration is over PUBLIC-tech versions/features (ES 7.x, 8.x, 9.x), each sub-query routes to the public docs index. If it spans public + internal, follow the cross-reference rule below.
 
 CRITICAL — cross-reference / "use A to inform/constrain B" patterns are TWO topics, not one:
 When the user's request involves a PUBLIC technical fact AND an INTERNAL/CONSTRAINING context, it is **two retrieval targets**: one for the public side (Elasticsearch/Kafka official docs), one for the internal side (Confluence 사내 위키). Decompose into ONE sub-query per side. The LLM at answer time will combine the two.
@@ -252,7 +273,13 @@ Decomposition rule:
     (Note: 명시적 "참고해서" 같은 linker 없이도 "최신 버전" + "회사 표준" 동시 등장 → public + internal 두 토픽. X side = ES 공식 설치 자료, Y side = 사내 표준. LLM이 두 자료를 조합해 스크립트를 합성.)
 11. Query: Kafka 공식 가이드대로 사내 보안 정책에 맞춰 SSL 설정해줘
     Decomposed Questions: [Question(question='Kafka SSL TLS 설정 공식 가이드', answer=None), Question(question='사내 Kafka 보안 정책 및 인증서 표준', answer=None)]
-12. Query: {query}
+12. Query: Elasticsearch 7.x, 8.x, 9.x 버전별 업그레이드 방법 알려줘
+    Decomposed Questions: [Question(question='Elasticsearch 7.x 업그레이드 가이드', answer=None), Question(question='Elasticsearch 8.x 업그레이드 가이드', answer=None), Question(question='Elasticsearch 9.x 업그레이드 가이드', answer=None)]
+    (Note: distributive "버전별" → one sub-query per enumerated version. "버전별" marker dropped from each sub-query.)
+13. Query: Elasticsearch TLS, API key, role 기반 인증 각각 설정 방법
+    Decomposed Questions: [Question(question='Elasticsearch TLS 인증 설정', answer=None), Question(question='Elasticsearch API key 인증 설정', answer=None), Question(question='Elasticsearch role 기반 인증 설정', answer=None)]
+    (Note: distributive "각각" → one sub-query per enumerated auth mechanism.)
+14. Query: {query}
     Decomposed Questions:
 
 Respond ONLY with a JSON object in this exact shape (no other text, no Python literals):
