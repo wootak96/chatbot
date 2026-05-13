@@ -118,9 +118,13 @@ REWRITE only when the current question contains one of these REFERENTIAL TRIGGER
    - 그러면 / 그럼 / 그래서 / 그러니까
 4. Group references back to earlier items
    - 둘 / 둘 중 / 둘 다 / 셋 다
-5a. A bare predicate / interrogative WITHOUT its own explicit topic
-   - "어떻게 설정해?", "왜 그래?", "어디서 받아?", "그래서?", "더?", "또?"
-   (the verb has no object/topic in the current sentence — fill it from history)
+5a. A bare predicate / interrogative / imperative WITHOUT its own explicit topic
+   - Interrogative: "어떻게 설정해?", "왜 그래?", "어디서 받아?", "그래서?", "더?", "또?"
+   - Imperative (especially when accepting an assistant offer): "정리해줘", "표로 만들어줘", "비교해줘", "예시 들어줘", "더 자세히 설명해줘", "다시 알려줘"
+   When filling in the missing topic, you MUST include BOTH:
+     (a) the BROADER system/product/umbrella context the conversation has been about (e.g., "Kafka", "Elasticsearch", "사내 클러스터", "Confluence 위키"), AND
+     (b) the NARROW phrase the assistant just offered or the topic from the most recent user turn (e.g., "subject와 version 관계", "마스터 노드 교체 방법").
+   Both pieces matter — (b) alone gives the search engine no domain anchor; (a) alone is too generic to find the specific page. The reformed query should look like "<broader-context>의 <narrow-phrase>를 <verb>".
 5b. A bare topic phrase ending in a topic marker (은/는/이/가) WITHOUT its own predicate
    - "리밸런싱은?", "벡터 차원수는?", "9버전은?", "사내 가이드는?"
    (the topic exists but the question/predicate must be inferred from history; fill the verb/intent from the prior turn)
@@ -204,6 +208,23 @@ Output a SINGLE Korean sentence (or the input verbatim if no trigger applies). D
     history: "사용자: 사내 ES 클러스터 운영 표준 알려줘\\n어시스턴트: ... 혹시 마스터 노드 교체 방법도 궁금하시면 자세히 알려드릴게요."
     current: "마스터 노드 교체 방법 알려줘"
     → "사내 ES 클러스터 마스터 노드 교체 방법 알려줘"
+
+13. (TRIGGER 5a — imperative "정리해줘" accepting offer; MUST include both broader Kafka context AND narrow subject/version phrase)
+    history: "사용자: Kafka Schema Registry 설명해줘\\n어시스턴트: ... 원하시면 subject와 version 관계를 다시 표로 정리해드릴게요."
+    current: "정리해줘"
+    → "Kafka Schema Registry의 subject와 version 관계를 표로 정리해줘"
+    ❌ "subject와 version 관계 정리해줘"  ← Kafka 컨텍스트 누락 — 너무 모호함
+    ❌ "Kafka 정리해줘"                  ← narrow 주제 누락 — 너무 광범위함
+
+14. (TRIGGER 5a — imperative "표로 만들어줘"; broader=Elasticsearch/Kafka, narrow=비교)
+    history: "사용자: Elasticsearch와 Kafka 차이점 알려줘\\n어시스턴트: ... 필요하시면 비교 항목을 표로 만들어드릴 수 있어요."
+    current: "표로 만들어줘"
+    → "Elasticsearch와 Kafka 비교 표로 만들어줘"
+
+15. (TRIGGER 5a — imperative "더 자세히 알려줘"; broader=사내 ES 클러스터, narrow=샤드 분배)
+    history: "사용자: 사내 ES 클러스터 운영 표준 알려줘\\n어시스턴트: ... 혹시 샤드 분배 전략도 궁금하시면 알려드릴게요."
+    current: "더 자세히 알려줘"
+    → "사내 ES 클러스터 샤드 분배 전략 더 자세히 알려줘"
 
 Respond ONLY with this JSON. No other text.
 {{"reformed_query": "..."}}
