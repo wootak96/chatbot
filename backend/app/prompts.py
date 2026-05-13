@@ -129,10 +129,15 @@ REWRITE only when the current question contains one of these REFERENTIAL TRIGGER
    - AND the immediately prior assistant turn enumerated specific items (e.g., "7.x, 8.x, 9.x", "snapshot·restore·monitoring", "TLS / API key / role 기반")
    - → REWRITE by replacing the distributive marker with the explicit enumeration from the prior assistant turn, comma-separated. The downstream `query_decompose` will then split it.
    - Use the prior turn's NUMBERING/LABELS verbatim — do not paraphrase the items.
+7. Acceptance of an assistant-offered NARROW follow-up
+   - The immediately prior assistant turn ended with an offer/invitation that named a NARROWER aspect of the conversation's main subject. Offer markers: "원하시면", "혹시 ~ 궁금하시면", "다시 정리해드릴", "더 자세히 알려드릴", "다뤄볼 수 있어요", "이어서 ~ 설명드릴", "필요하시면 말씀 주세요".
+   - AND the current question's topic is exactly (or substantially) that narrower noun phrase the assistant just offered, BUT drops the broader system/product/context that the conversation has been about (e.g., "Kafka", "Elasticsearch", "사내 클러스터").
+   - → REWRITE by grafting the broader system/product context onto the current question. Do NOT change the offered narrow phrase itself.
+   - This trigger OVERRIDES the "current already has its own explicit topic" exclusion below.
 
 DO NOT REWRITE — return the input UNCHANGED:
-- The current question already names its own explicit topic/subject (e.g., "CPU alert 설정은 어떻게 해?" has "CPU alert 설정" as the topic — do NOT graft prior topic onto it).
-- The current question's topic clearly differs from history.
+- The current question already names its own explicit topic/subject AND it's NOT echoing a narrow phrase from a prior assistant offer (e.g., "CPU alert 설정은 어떻게 해?" has "CPU alert 설정" as the topic and the prior turn did not specifically offer that — do NOT graft prior topic onto it). EXCEPTION: TRIGGER 7 above when the topic is the exact narrow phrase the assistant just offered.
+- The current question's topic clearly differs from history AND the assistant did not just offer that topic.
 - No history is available.
 
 When in doubt, return the input unchanged. False fusion ("Elasticsearch 설치 스크립트의 CPU alert 설정") is much worse than a slightly under-specified query.
@@ -189,6 +194,16 @@ Output a SINGLE Korean sentence (or the input verbatim if no trigger applies). D
     history: "사용자: ES 인증 옵션 뭐 있어?\\n어시스턴트: ES는 TLS, API key, role 기반 인증을 지원합니다."
     current: "각각 어떻게 설정해?"
     → "Elasticsearch TLS, API key, role 기반 인증 각각 설정 방법"
+
+11. (TRIGGER 7 — accepting an assistant-offered narrow follow-up)
+    history: "사용자: Kafka Schema Registry 설명해줘\\n어시스턴트: ... 원하시면 subject와 version 관계를 다시 표로 정리해드릴 수 있어요."
+    current: "subject와 version 관계 알려줘"
+    → "Kafka Schema Registry의 subject와 version 관계 알려줘"
+
+12. (TRIGGER 7 — 어시스턴트가 제안한 "마스터 노드 교체 방법" 그대로 수락)
+    history: "사용자: 사내 ES 클러스터 운영 표준 알려줘\\n어시스턴트: ... 혹시 마스터 노드 교체 방법도 궁금하시면 자세히 알려드릴게요."
+    current: "마스터 노드 교체 방법 알려줘"
+    → "사내 ES 클러스터 마스터 노드 교체 방법 알려줘"
 
 Respond ONLY with this JSON. No other text.
 {{"reformed_query": "..."}}
