@@ -32,24 +32,24 @@ async def generate(state: RAGState) -> dict:
         sources: list[dict] = []
     else:
         candidates = state.get("candidates") or []
-        if not candidates or not state.get("sufficient", False):
-            return {
-                "final_answer": "해당 정보를 찾을 수 없습니다.",
-                "sources": [],
-                PROGRESS_KEY: "",
-            }
+        # No early-return on insufficient/empty candidates anymore — the
+        # GENERATE prompt's soft-escape rule produces a warm 3-line redirect
+        # (summary / reason / alternative phrasings) instead of the cold
+        # "해당 정보를 찾을 수 없습니다." one-liner.
         prompt = prompts.GENERATE.format(
             query=query,
             docs=render_docs_full(
                 candidates,
                 char_limit=get_settings().generate_doc_char_limit,
-            ),
+            ) if candidates else "(검색 결과 없음)",
             user_md_block=user_md_block,
         )
+        # Sources only listed when we have docs — empty list in soft-escape
+        # means the post-stream "📚 답변 인용 문서" block is skipped.
         sources = [
             {"url": d.get("url", ""), "title": d.get("title", "")}
             for d in candidates
-        ]
+        ] if state.get("sufficient", False) else []
 
     response = await get_generator_llm().ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
