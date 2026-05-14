@@ -678,20 +678,15 @@ Rules:
 - Insert citations of the form [1], [2] inline in the answer body. Citation numbers MUST match the document order below.
 - **NEVER write a "**출처**" section, URL list, or document-title list.** The body only needs the inline `[N]` citations — the client automatically converts each `[N]` into a clickable link to the corresponding document URL.
 - Cite only the documents you actually used. Do not include unused document numbers in the body.
-- Soft-escape rule: when you cannot produce a grounded answer (every retrieved document is clearly off-topic, OR no documents were retrieved at all), do NOT use the bare phrase "해당 정보를 찾을 수 없습니다." Instead respond in this Korean format:
-  · Line 1 — 무엇을 검색했는지 한 줄 요약. 예: "사내 문서에서 '<질문 핵심 키워드>' 관련 자료를 찾아봤어요."
-  · Line 2 — 왜 답을 못 했는지 짧게. retrieved 문서들의 실제 주제를 한 마디로 요약하며 "그쪽만 다뤄서 정확한 답을 드리기 어렵네요"는 톤. 0건 검색일 땐 "관련된 사내 문서를 찾지 못했어요."
-  · Line 3 — "혹시 이런 걸로 검색해볼까요?" 같은 자연스러운 한 문장으로 추천 검색 키워드 안내를 시작.
-  · Line 4+ — `- ` 불릿으로 추천 검색 키워드 2~3개. 키워드는 (a) 사용자 질문의 합리적 재표현, OR (b) 실제 retrieved 문서에 등장한 인접 용어로만. 임의로 만들어내지 말 것. 짧은 키워드 형태("OOO 설정 방법", "OOO 장애 조치" 같은) 권장 — 사용자가 그대로 복붙해 다시 질문할 수 있게.
-  Soft-escape 모드일 때는 `[N]` 인용을 절대 쓰지 말고 (인용할 문서가 없음), 답변 끝에 별도의 follow-up 문장(아래 룰)도 추가하지 않는다 — Line 3~4의 추천 키워드가 그 역할을 대신함.
-- Partial-coverage rule: if at least ONE document PARTIALLY relates to the question, you MUST attempt an answer based on that document with `[N]` citation — do NOT trigger soft-escape just because no single document fully answers. For uncovered parts, add a brief one-liner like "이 부분은 검색된 문서에 직접 언급되어 있지 않습니다." Don't conflate "no exact phrasing match" with "unrelated"; surface terminology often differs from query wording.
+{escape_directive}
+- Partial-coverage rule: if at least ONE document PARTIALLY relates to the question, you MUST attempt an answer based on that document with `[N]` citation — do NOT trigger the no-grounded-answer path just because no single document fully answers. For uncovered parts, add a brief one-liner like "이 부분은 검색된 문서에 직접 언급되어 있지 않습니다." Don't conflate "no exact phrasing match" with "unrelated"; surface terminology often differs from query wording.
 - When a cited document presents information as a Markdown table and that information is what answers the question, render your answer as a Markdown table too — mirror the source's column structure instead of paraphrasing it into prose. For partial overlaps (only some columns/rows relate), reproduce the relevant rows/columns as a table and add prose context around it.
 - Include a concrete example whenever it aids understanding — config snippets, command lines, sample values, or short scenarios. If the cited documents already contain such examples, surface them (with `[N]` citation) instead of inventing your own. Do NOT fabricate examples that aren't grounded in the cited documents.
 - After the main answer, invite follow-up questions in a natural conversational way — NOT as a fixed-format bullet section with a heading. Write 1~2 short Korean sentences that flow from the answer, mentioning 1~3 adjacent topics the user might ask about next. Tone should feel like a colleague chatting, not a template. Examples of acceptable shapes (vary the wording each time):
   · "혹시 X 쪽도 궁금하시면 자세히 알려드릴게요."
   · "Y나 Z도 같이 나오는 주제인데, 필요하시면 말씀 주세요."
   · "추가로 W가 어떻게 동작하는지도 다뤄볼 수 있어요."
-  Do NOT use a heading like "**다음에 더 물어보실 만한 질문**" or a bullet list for these. Skip this entirely in soft-escape mode (the Line 3 alternative keywords already invite the next move).
+  Do NOT use a heading like "**다음에 더 물어보실 만한 질문**" or a bullet list for these. Skip this entirely when you cannot produce a grounded answer (the no-grounded-answer directive above already handles that case).
 - If a `[사용자 지침]` block appears below, follow those style/tone preferences UNLESS they conflict with the rules above (citation correctness and grounding always win).
 {user_md_block}
 [질문]
@@ -700,6 +695,26 @@ Rules:
 [검색된 문서]
 {docs}
 """
+
+
+# `{escape_directive}` slot for the GENERATE prompt — what to do when no
+# grounded answer is possible. Which one is injected depends on whether the
+# retrieval retry budget still has room (see graph/nodes/generate.py).
+
+# FINAL attempt: the system will NOT auto-retry after this, so it is the
+# right moment to hand the user concrete alternative search keywords.
+GENERATE_ESCAPE_FINAL = """- No-grounded-answer rule: when you cannot produce a grounded answer (every retrieved document is clearly off-topic, OR no documents were retrieved at all), do NOT use the bare phrase "해당 정보를 찾을 수 없습니다." Instead respond in this Korean format:
+  · Line 1 — 무엇을 검색했는지 한 줄 요약. 예: "사내 문서에서 '<질문 핵심 키워드>' 관련 자료를 찾아봤어요."
+  · Line 2 — 왜 답을 못 했는지 짧게. retrieved 문서들의 실제 주제를 한 마디로 요약하며 "그쪽만 다뤄서 정확한 답을 드리기 어렵네요"는 톤. 0건 검색일 땐 "관련된 사내 문서를 찾지 못했어요."
+  · Line 3 — "혹시 이런 걸로 검색해볼까요?" 같은 자연스러운 한 문장으로 추천 검색 키워드 안내를 시작.
+  · Line 4+ — `- ` 불릿으로 추천 검색 키워드 2~3개. 키워드는 (a) 사용자 질문의 합리적 재표현, OR (b) 실제 retrieved 문서에 등장한 인접 용어로만. 임의로 만들어내지 말 것. 짧은 키워드 형태("OOO 설정 방법", "OOO 장애 조치" 같은) 권장 — 사용자가 그대로 복붙해 다시 질문할 수 있게.
+  이 모드일 때는 `[N]` 인용을 절대 쓰지 말고 (인용할 문서가 없음), 답변 끝에 별도의 follow-up 문장(아래 룰)도 추가하지 않는다 — Line 3~4의 추천 키워드가 그 역할을 대신함."""
+
+# NON-FINAL attempt: the system will automatically re-search with a wider
+# net right after this. Do NOT suggest search keywords here — that would
+# read as asking the user to act, only for the bot to immediately re-search
+# on its own. Just give one honest sentence; the re-search handles the rest.
+GENERATE_ESCAPE_RETRYABLE = """- No-grounded-answer rule: when you cannot produce a grounded answer (every retrieved document is clearly off-topic, OR no documents were retrieved at all), respond with EXACTLY ONE short honest Korean sentence saying you have not found it in the documents searched so far — e.g., "지금까지 검색한 사내 문서에서는 '<질문 핵심 키워드>' 관련 내용을 찾지 못했어요." Do NOT suggest alternative search keywords, do NOT ask the user anything, do NOT add a follow-up sentence — the system will automatically re-search with a wider net. No `[N]` citations. Just that single sentence."""
 
 
 CHITCHAT = """You are the "오토에버 클라우드솔루션팀 챗봇". Respond in Korean.

@@ -31,18 +31,36 @@ async def generate(state: RAGState) -> dict:
         prompt = prompts.CHITCHAT.format(query=query, user_md_block=user_md_block)
         sources: list[dict] = []
     else:
+        settings = get_settings()
         candidates = state.get("candidates") or []
-        # No early-return on insufficient/empty candidates anymore — the
-        # GENERATE prompt's soft-escape rule produces a warm 3-line redirect
-        # (summary / reason / alternative phrasings) instead of the cold
-        # "해당 정보를 찾을 수 없습니다." one-liner.
+        # When generate can't ground an answer, what it should emit depends on
+        # whether the retrieval loop will auto-retry after this pass:
+        #   - non-final attempt → a single honest "not found yet" sentence
+        #     (answer_check rejects it → wider re-search). Suggesting search
+        #     keywords here would be odd — the bot would immediately re-search
+        #     on its own right after asking the user to.
+        #   - final attempt → the full redirect WITH alternative keywords,
+        #     since there will be no more auto-retry.
+        # Final = answer_check rejecting this pass can't trigger another retry:
+        # the shared budget is (about to be) spent, or there are no plans to vary.
+        budget = len(settings.retrieval_top_k_schedule)
+        is_final_attempt = (
+            state.get("retry_count", 0) >= budget - 1
+            or not (state.get("search_plans") or [])
+        )
+        escape_directive = (
+            prompts.GENERATE_ESCAPE_FINAL
+            if is_final_attempt
+            else prompts.GENERATE_ESCAPE_RETRYABLE
+        )
         prompt = prompts.GENERATE.format(
             query=query,
             docs=render_docs_full(
                 candidates,
-                char_limit=get_settings().generate_doc_char_limit,
+                char_limit=settings.generate_doc_char_limit,
             ) if candidates else "(검색 결과 없음)",
             user_md_block=user_md_block,
+            escape_directive=escape_directive,
         )
         # Sources only listed when we have docs — empty list in soft-escape
         # means the post-stream "📚 답변 인용 문서" block is skipped.
