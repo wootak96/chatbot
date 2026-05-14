@@ -919,19 +919,28 @@ CHAT_HTML = """<!doctype html>
     wrap.appendChild(body);
     chat.appendChild(wrap);
     let buf = '';
+    // Answer text from rejected generate passes. Kept on screen with a
+    // "재검색 중" note so a re-search reads as the bot continuing to think
+    // out loud — the re-searched answer streams in right below it instead
+    // of the previous answer vanishing.
+    let committedAnswer = '';
     const SEP = '\\n─────────────────────────────────────\\n';
+    const RETRY_NOTE = '\\n\\n---\\n\\n🔄 *재검색 중입니다...*\\n\\n';
     function update(text) {
       buf += text;
-      // Post-generate retry: the server rejected the answer it had already
-      // streamed and is re-searching. Strip the marker and drop everything
-      // from the separator onward, keeping the accumulated progress lines so
-      // the retry's fresh progress + new answer render cleanly.
+      // Post-generate retry: the server rejected the answer it already
+      // streamed. Commit that answer (minus its now-stale [N] citations)
+      // plus a retry note to the transcript, then truncate buf back to the
+      // progress lines so the re-searched answer streams cleanly below it.
       let resetAt;
       while ((resetAt = buf.indexOf('<!--RESET-->')) >= 0) {
         buf = buf.slice(0, resetAt) + buf.slice(resetAt + 12);
         const sepAt = buf.indexOf(SEP);
-        if (sepAt >= 0) buf = buf.slice(0, sepAt);
-        body.textContent = '';
+        if (sepAt >= 0) {
+          const rejected = parseCites(buf.slice(sepAt + SEP.length)).stripped;
+          committedAnswer += rejected.replace(/\\[\\d[\\d,\\s]*\\]/g, '').trim() + RETRY_NOTE;
+          buf = buf.slice(0, sepAt);
+        }
       }
       const idx = buf.indexOf(SEP);
       if (idx >= 0) {
@@ -940,11 +949,12 @@ CHAT_HTML = """<!doctype html>
         progress.textContent = before;
         if (before) progress.style.display = '';
         const parsed = parseCites(after);
-        body.innerHTML = renderText(parsed.stripped, parsed.cites);
+        body.innerHTML = renderText(committedAnswer + parsed.stripped, parsed.cites);
       } else {
         progress.textContent = buf.trim();
         if (progress.textContent) progress.style.display = '';
-        body.textContent = '';
+        // During a re-search the prior answer + retry note stay on screen.
+        body.innerHTML = committedAnswer ? renderText(committedAnswer, {}) : '';
       }
       chat.scrollTop = chat.scrollHeight;
     }

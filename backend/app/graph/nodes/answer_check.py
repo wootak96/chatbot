@@ -48,9 +48,9 @@ async def answer_check(state: RAGState) -> dict:
 
     update: dict = {
         "answer_ok": answer_ok,
-        PROGRESS_KEY: (
-            f"✅ 답변 품질 검증... {'✓ 양호' if answer_ok else '✗ 부족 — 재검색'}"
-        ),
+        # Only surface the gate in the trace when it actually does something
+        # (rejects → re-search). A passing verdict is silent.
+        PROGRESS_KEY: "" if answer_ok else "✅ 답변 품질 검증... ✗ 부족 — 재검색",
     }
     if not answer_ok:
         # Overwrite sufficiency_reason so query_variate varies the next search
