@@ -344,6 +344,38 @@ CHAT_HTML = """<!doctype html>
     margin-top: 10px; min-height: 16px; text-align: center;
   }
 
+  /* First-login welcome modal — mirrors the iOS login card */
+  #welcome-overlay {
+    position: fixed; inset: 0; z-index: 100;
+    display: none; align-items: center; justify-content: center;
+    padding: 20px;
+    background: rgba(0,0,0,0.28);
+  }
+  #welcome-card {
+    background: var(--panel-solid);
+    border-radius: 18px; padding: 28px 24px;
+    width: 100%; max-width: 400px;
+    box-shadow: var(--shadow);
+    border: 0.5px solid var(--separator);
+  }
+  #welcome-card h2 {
+    margin: 0 0 12px; font-size: 20px; font-weight: 700;
+    color: var(--text); text-align: center; letter-spacing: -0.02em;
+  }
+  #welcome-card p {
+    margin: 0 0 22px; color: var(--text-soft);
+    font-size: 14px; line-height: 1.6; text-align: left;
+  }
+  #welcome-card button {
+    width: 100%; background: var(--accent);
+    color: white; border: none; padding: 13px;
+    border-radius: 12px; font: inherit; font-size: 16px;
+    font-weight: 600; cursor: pointer;
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  #welcome-card button:hover { background: var(--accent-pressed); }
+  #welcome-card button:active { transform: scale(0.985); }
+
   /* iOS user pill in nav bar */
   header .user-pill {
     background: var(--field); color: var(--text);
@@ -413,6 +445,15 @@ CHAT_HTML = """<!doctype html>
     </div>
   </div>
 
+  <!-- First-login welcome modal: shown once per user_id (localStorage flag) -->
+  <div id="welcome-overlay">
+    <div id="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+      <h2 id="welcome-title">환영합니다</h2>
+      <p>안녕하세요! 이 챗봇은 사내 Confluence/Kafka/Elasticsearch 문서를 검색해 답변합니다. 처음 사용하시는 계정은 개인화를 위해 답변 출력 형태를 지정해주시면, 이를 바탕으로 더욱 정확하고 사용자님의 업무 스타일에 최적화된 답변을 제공해 드릴 수 있습니다.</p>
+      <button id="welcome-close" type="button">시작하기</button>
+    </div>
+  </div>
+
 <script>
 (function() {
   // ── Login gate: require ?user_id=<id> in the URL ──
@@ -455,6 +496,24 @@ CHAT_HTML = """<!doctype html>
   // Show chat UI now that we have a user_id.
   chatHeader.style.display = '';
   appBody.style.display = '';
+
+  // First-login welcome modal — shown once per user_id, then suppressed
+  // via a localStorage flag so returning accounts never see it again.
+  (function showWelcomeOnce() {
+    const WELCOME_KEY = 'rag-chat:welcomed:' + userId;
+    try {
+      if (localStorage.getItem(WELCOME_KEY) === '1') return;
+    } catch (e) {}
+    const overlay = document.getElementById('welcome-overlay');
+    const closeBtn = document.getElementById('welcome-close');
+    overlay.style.display = 'flex';
+    function dismiss() {
+      overlay.style.display = 'none';
+      try { localStorage.setItem(WELCOME_KEY, '1'); } catch (e) {}
+    }
+    closeBtn.addEventListener('click', dismiss);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
+  })();
 
   const chat = chatMain;
   const empty = document.getElementById('empty');
