@@ -95,57 +95,6 @@ async def test_workflow_retry_on_insufficient(stub_judge, stub_generator, stub_e
 
 
 @pytest.mark.asyncio
-async def test_workflow_answer_check_rejects_then_retries(
-    stub_judge, stub_generator, stub_es
-):
-    """A falsely-'sufficient' self_check verdict that still yields a non-answer
-    is caught by answer_check, which loops back through query_variate for a
-    wider re-search. The second generated answer is accepted."""
-    stub_judge(
-        [
-            '{"intent": "question", "resolved_query": "Kafka 컨슈머 그룹"}',
-            '{"search_intent": "lookup"}',
-            '{"sub_queries": ["Kafka 컨슈머 그룹"]}',
-            '{"indices": ["kafka"]}',
-            '{"keywords": "Kafka consumer group", "semantic": "definition of Kafka consumer group"}',
-            '{"source": null, "category": null, "date_range": null}',
-            # self_check #1 — optimistically sufficient
-            '{"sufficient": true, "reason": "ok"}',
-            # answer_check #1 — rejects the first (non-)answer
-            '{"answer_ok": false, "reason": "soft-escape로 답을 회피함"}',
-            # query_variate — vary the query for the re-search
-            '{"keywords": "Kafka consumer group rebalance", "semantic": "how Kafka consumer groups rebalance"}',
-            # self_check #2
-            '{"sufficient": true, "reason": "ok"}',
-            # answer_check #2 — accepts the second answer
-            '{"answer_ok": true, "reason": "구체적으로 답함"}',
-        ]
-    )
-    stub_generator(
-        [
-            "혹시 이런 걸로 검색해볼까요?\n- Kafka consumer group",  # rejected
-            "Kafka 컨슈머 그룹은 파티션을 나눠 소비하는 단위입니다 [1].",  # accepted
-        ]
-    )
-    counter = stub_es(
-        [
-            [{"id": "k1", "title": "K1", "url": "u/k1", "content": "kafka"}],
-            [{"id": "k2", "title": "K2", "url": "u/k2", "content": "kafka rebalance"}],
-        ]
-    )
-
-    workflow = build_workflow()
-    state = initial_state([{"role": "user", "content": "kafka 컨슈머 그룹"}])
-    final = await workflow.ainvoke(state)
-
-    assert counter["n"] == 2  # answer_check rejection triggered a re-search
-    assert final["answer_ok"] is True
-    assert "컨슈머 그룹은" in final["final_answer"]  # the accepted (2nd) answer
-    assert final["retry_count"] == 1  # bumped once by the answer_check rejection
-    assert final["sources"] == [{"url": "u/k2", "title": "K2"}]
-
-
-@pytest.mark.asyncio
 async def test_workflow_routes_to_kafka(stub_judge, stub_generator, stub_es):
     stub_judge(
         [

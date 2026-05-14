@@ -53,7 +53,6 @@ def stub_judge(monkeypatch):
         # Also patch the module-bound reference each node imported.
         from app.graph import post_check
         from app.graph.nodes import (
-            answer_check,
             instruction_save,
             query_analyze,
             query_decompose,
@@ -76,7 +75,6 @@ def stub_judge(monkeypatch):
             metadata_extract,
             index_route,
             self_check,
-            answer_check,
             post_check,
             instruction_save,
         ):

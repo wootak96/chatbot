@@ -919,29 +919,9 @@ CHAT_HTML = """<!doctype html>
     wrap.appendChild(body);
     chat.appendChild(wrap);
     let buf = '';
-    // Answer text from rejected generate passes. Kept on screen so a
-    // re-search reads as the bot continuing to think out loud — the
-    // re-searched answer streams in right below it (separated by a plain
-    // divider) instead of the previous answer vanishing.
-    let committedAnswer = '';
     const SEP = '\\n─────────────────────────────────────\\n';
-    const RETRY_SEP = '\\n\\n---\\n\\n';
     function update(text) {
       buf += text;
-      // Post-generate retry: the server rejected the answer it already
-      // streamed. Commit that answer (minus its now-stale [N] citations) to
-      // the transcript with a divider, then truncate buf back to the progress
-      // lines so the re-searched answer streams cleanly below it.
-      let resetAt;
-      while ((resetAt = buf.indexOf('<!--RESET-->')) >= 0) {
-        buf = buf.slice(0, resetAt) + buf.slice(resetAt + 12);
-        const sepAt = buf.indexOf(SEP);
-        if (sepAt >= 0) {
-          const rejected = parseCites(buf.slice(sepAt + SEP.length)).stripped;
-          committedAnswer += rejected.replace(/\\[\\d[\\d,\\s]*\\]/g, '').trim() + RETRY_SEP;
-          buf = buf.slice(0, sepAt);
-        }
-      }
       const idx = buf.indexOf(SEP);
       if (idx >= 0) {
         const before = buf.slice(0, idx).trim();
@@ -949,12 +929,11 @@ CHAT_HTML = """<!doctype html>
         progress.textContent = before;
         if (before) progress.style.display = '';
         const parsed = parseCites(after);
-        body.innerHTML = renderText(committedAnswer + parsed.stripped, parsed.cites);
+        body.innerHTML = renderText(parsed.stripped, parsed.cites);
       } else {
         progress.textContent = buf.trim();
         if (progress.textContent) progress.style.display = '';
-        // During a re-search the prior answer stays on screen.
-        body.innerHTML = committedAnswer ? renderText(committedAnswer, {}) : '';
+        body.textContent = '';
       }
       chat.scrollTop = chat.scrollHeight;
     }
