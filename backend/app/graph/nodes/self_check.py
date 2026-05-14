@@ -63,13 +63,17 @@ def should_retry(state: RAGState) -> str:
       - 'retry'                : insufficient & retry budget left → loop back
                                  through query_variate → hybrid_retrieve.
       - 'generate' (exhausted) : retry budget exhausted → still go to generate,
-                                 which emits "해당 정보를 찾을 수 없습니다".
+                                 which emits the soft-escape redirect.
                                  Domain questions (Elasticsearch/Kafka) MUST
                                  NOT fall back to general LLM knowledge — the
                                  corpus is the single source of truth.
+
+    The attempt budget is the length of `retrieval_top_k_schedule`: each
+    retry widens top_k (10 → 20 → 30), and once every entry is spent the
+    loop stops.
     """
     if state.get("sufficient"):
         return "generate"
-    if state.get("retry_count", 0) >= get_settings().retrieval_max_retry:
+    if state.get("retry_count", 0) >= len(get_settings().retrieval_top_k_schedule):
         return "generate"
     return "retry"

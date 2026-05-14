@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from app.config import get_settings
 from app.graph.nodes import PROGRESS_KEY
 from app.graph.nodes._helpers import doc_dedup_key, doc_label
 from app.graph.state import RAGState, SearchPlan
@@ -31,6 +32,13 @@ async def hybrid_retrieve(state: RAGState) -> dict:
 
     metadata = state.get("metadata_filters") or {}
 
+    # Escalating top_k: attempt 0 pulls a tight set, each re-search widens it.
+    # `retry_count` is 0 on the first pass and is bumped by self_check before
+    # the loop comes back here, so it indexes straight into the schedule.
+    schedule = get_settings().retrieval_top_k_schedule
+    attempt = state.get("retry_count", 0)
+    top_k = schedule[min(attempt, len(schedule) - 1)]
+
     async def _search(p: SearchPlan):
         bm25 = p.get("bm25") or p.get("sub_query") or ""
         sem = p.get("semantic") or bm25
@@ -47,6 +55,7 @@ async def hybrid_retrieve(state: RAGState) -> dict:
                 semantic_query_text=sem,
                 indices=[index],
                 metadata_filters=metadata,
+                size=top_k,
             ),
             single_retriever_search(
                 retriever_kind="bm25",
@@ -54,6 +63,7 @@ async def hybrid_retrieve(state: RAGState) -> dict:
                 semantic_query_text=sem,
                 indices=[index],
                 metadata_filters=metadata,
+                size=top_k,
             ),
             single_retriever_search(
                 retriever_kind="semantic",
@@ -61,6 +71,7 @@ async def hybrid_retrieve(state: RAGState) -> dict:
                 semantic_query_text=sem,
                 indices=[index],
                 metadata_filters=metadata,
+                size=top_k,
             ),
         )
         return rrf_hits, bm25_hits, sem_hits
@@ -131,7 +142,7 @@ async def hybrid_retrieve(state: RAGState) -> dict:
         "bm25_only_results": bm25_only_results,
         "semantic_only_results": semantic_only_results,
         PROGRESS_KEY: (
-            f"📚 Knowledge Base 검색 중.. ({len(merged)}건 발견)"
+            f"📚 Knowledge Base 검색 중.. (top_k={top_k}, {len(merged)}건 발견)"
             f"{labels_block}"
         ),
     }

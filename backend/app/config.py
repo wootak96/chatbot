@@ -59,7 +59,12 @@ class Settings(BaseSettings):
     retrieval_rank_window: int = 100
     retrieval_rank_constant: int = 60
     retrieval_top_k: int = 20
-    retrieval_max_retry: int = 2
+    # top_k schedule for the retrieval retry loop: attempt N (0-based) pulls
+    # `retrieval_top_k_schedule[N]` docs, widening the net each re-search.
+    # The list length is also the attempt budget — once all entries are
+    # spent and self_check still says insufficient, the flow gives up and
+    # generate produces the soft-escape redirect.
+    retrieval_top_k_schedule: list[int] = [10, 20, 30]
     # Per-doc body cap shown to the answer LLM. Bigger means more context
     # reaches the LLM (and longer pages have a chance to surface their
     # actual answer body that was past the head section), at the cost of

@@ -578,9 +578,13 @@ async def test_self_check_no_candidates(stub_judge):
 def test_should_retry_branches():
     assert should_retry({"sufficient": True}) == "generate"
     assert should_retry({"sufficient": False, "retry_count": 0}) == "retry"
-    # When retry budget is exhausted without sufficient evidence, route to
-    # generate (which emits "해당 정보를 찾을 수 없습니다."). Domain questions
-    # MUST stay grounded in the ES corpus and never fall back to general_chat.
+    # Budget is len(retrieval_top_k_schedule) — the last in-budget attempt
+    # still routes to 'retry'.
+    assert should_retry({"sufficient": False, "retry_count": 2}) == "retry"
+    # When the retry budget is exhausted without sufficient evidence, route to
+    # generate (which emits the soft-escape redirect). Domain questions MUST
+    # stay grounded in the ES corpus and never fall back to general_chat.
+    assert should_retry({"sufficient": False, "retry_count": 3}) == "generate"
     assert should_retry({"sufficient": False, "retry_count": 99}) == "generate"
 
 
@@ -600,8 +604,11 @@ async def test_generate_with_docs(stub_generator):
 
 
 @pytest.mark.asyncio
-async def test_generate_without_sufficient_returns_no_info(stub_generator):
-    stub_generator([])  # should not be called
+async def test_generate_without_sufficient_calls_llm_with_no_sources(stub_generator):
+    # Insufficient evidence no longer short-circuits to a cold one-liner —
+    # generate calls the LLM so the GENERATE prompt's soft-escape rule can
+    # produce a warm redirect. Sources stay empty (nothing grounded to cite).
+    stub_generator(["혹시 이런 걸로 검색해볼까요?\n- 키워드"])
     out = await generate(
         {
             "intent": "question",
@@ -610,7 +617,7 @@ async def test_generate_without_sufficient_returns_no_info(stub_generator):
             "sufficient": False,
         }
     )
-    assert out["final_answer"] == "해당 정보를 찾을 수 없습니다."
+    assert "검색해볼까요" in out["final_answer"]
     assert out["sources"] == []
 
 

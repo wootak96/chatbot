@@ -16,8 +16,9 @@ Flow:
    -> hybrid_retrieve
    -> self_check
         sufficient            -> generate (RAG-grounded) -> END
-        retry < max           -> query_variate -> hybrid_retrieve (cycle)
-        retry >= max          -> generate ("해당 정보를 찾을 수 없습니다") -> END
+        retry budget left     -> query_variate -> hybrid_retrieve (cycle,
+                                 each pass widens top_k: 10 -> 20 -> 30)
+        budget exhausted      -> generate (soft-escape redirect) -> END
 
 Routing now runs BEFORE rewrite so rewrites can be index-aware: the
 confluence_docs corpus is Korean while elasticsearch_docs / kafka_docs are
