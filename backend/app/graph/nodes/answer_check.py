@@ -38,7 +38,7 @@ async def answer_check(state: RAGState) -> dict:
             "answer_ok": False,
             "sufficiency_reason": "생성된 답변이 비어 있음",
             "retry_count": state.get("retry_count", 0) + 1,
-            PROGRESS_KEY: "✅ 답변 품질 검증... ✗ 빈 답변 — 재검색",
+            PROGRESS_KEY: "",
         }
 
     prompt = prompts.ANSWER_CHECK.format(query=query, answer=answer)
@@ -46,11 +46,11 @@ async def answer_check(state: RAGState) -> dict:
     answer_ok = bool(data.get("answer_ok", True))
     reason = data.get("reason") or ""
 
+    # answer_check stays silent in the progress trace — when it rejects, the
+    # query_variate node already surfaces the re-search to the user.
     update: dict = {
         "answer_ok": answer_ok,
-        # Only surface the gate in the trace when it actually does something
-        # (rejects → re-search). A passing verdict is silent.
-        PROGRESS_KEY: "" if answer_ok else "✅ 답변 품질 검증... ✗ 부족 — 재검색",
+        PROGRESS_KEY: "",
     }
     if not answer_ok:
         # Overwrite sufficiency_reason so query_variate varies the next search
