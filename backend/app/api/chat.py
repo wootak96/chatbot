@@ -104,6 +104,14 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
             # clear it, and reset the stream-side accumulators so only the
             # final accepted answer is streamed/logged.
             if event.get("name") == "query_variate" and answer_emitted:
+                # Flush generate's held-back tail FIRST — pending_buf holds the
+                # last few chars (kept back for SOURCE_MARKER detection) and is
+                # normally flushed only after the whole stream ends. Without
+                # this, the rejected answer is shown truncated mid-sentence.
+                if not sources_truncated and pending_buf:
+                    yield sse.text_chunk(
+                        pending_buf, model=request.model, completion_id=completion_id
+                    )
                 yield sse.text_chunk(
                     "<!--RESET-->", model=request.model, completion_id=completion_id
                 )
