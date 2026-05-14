@@ -88,11 +88,29 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     # by every LLM call in the graph (judge nodes + streaming generator).
     token_usage_by_node: dict[str, dict[str, int]] = {}
 
-    async for event in workflow.astream_events(state, version="v2"):
+    # recursion_limit guards the retry loops (self_check + answer_check). Each
+    # full re-search cycle is ~5 nodes; with the shared budget capped at
+    # len(retrieval_top_k_schedule) the graph terminates well under 50.
+    async for event in workflow.astream_events(
+        state, version="v2", config={"recursion_limit": 50}
+    ):
         kind = event.get("event")
         node_name = event.get("metadata", {}).get("langgraph_node") or event.get("name")
 
         if kind == "on_chain_end" and event.get("name") in _NODE_NAMES:
+            # Post-generate retry: query_variate only re-runs after a full
+            # generate pass when answer_check rejected the answer. The answer
+            # we already streamed is being discarded — tell the client to
+            # clear it, and reset the stream-side accumulators so only the
+            # final accepted answer is streamed/logged.
+            if event.get("name") == "query_variate" and answer_emitted:
+                yield sse.text_chunk(
+                    "<!--RESET-->", model=request.model, completion_id=completion_id
+                )
+                answer_emitted = False
+                sources_truncated = False
+                pending_buf = ""
+                streamed_answer_buf.clear()
             output = event.get("data", {}).get("output") or {}
             if isinstance(output, dict):
                 msg = output.get(PROGRESS_KEY)
@@ -350,6 +368,7 @@ def _build_log_doc(
         "forced_indices": final_state.get("forced_indices") or [],
         "sufficient": bool(final_state.get("sufficient", False)),
         "sufficiency_reason": final_state.get("sufficiency_reason") or "",
+        "answer_ok": bool(final_state.get("answer_ok", True)),
         "retry_count": int(final_state.get("retry_count", 0) or 0),
         "final_answer": final_answer,
         "sources": [
@@ -455,6 +474,7 @@ _NODE_NAMES = {
     "index_route",
     "hybrid_retrieve",
     "self_check",
+    "answer_check",
     "query_variate",
     "es_count",
     "es_list",

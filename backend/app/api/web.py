@@ -922,6 +922,17 @@ CHAT_HTML = """<!doctype html>
     const SEP = '\\n─────────────────────────────────────\\n';
     function update(text) {
       buf += text;
+      // Post-generate retry: the server rejected the answer it had already
+      // streamed and is re-searching. Strip the marker and drop everything
+      // from the separator onward, keeping the accumulated progress lines so
+      // the retry's fresh progress + new answer render cleanly.
+      let resetAt;
+      while ((resetAt = buf.indexOf('<!--RESET-->')) >= 0) {
+        buf = buf.slice(0, resetAt) + buf.slice(resetAt + 12);
+        const sepAt = buf.indexOf(SEP);
+        if (sepAt >= 0) buf = buf.slice(0, sepAt);
+        body.textContent = '';
+      }
       const idx = buf.indexOf(SEP);
       if (idx >= 0) {
         const before = buf.slice(0, idx).trim();

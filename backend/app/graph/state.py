@@ -93,6 +93,10 @@ class RAGState(TypedDict, total=False):
     retry_count: int
     sufficient: bool
     sufficiency_reason: str
+    # Post-generate answer-quality verdict (answer_check node). False means
+    # the generated answer didn't substantively address the question, so the
+    # flow loops back through query_variate for a wider re-search.
+    answer_ok: bool
 
     # Output
     final_answer: str
@@ -122,4 +126,5 @@ def initial_state(
         final_answer="",
         sufficient=False,
         sufficiency_reason="",
+        answer_ok=True,
     )

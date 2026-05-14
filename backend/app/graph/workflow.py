@@ -15,10 +15,21 @@ Flow:
    -> query_decompose -> index_route -> query_rewrite -> metadata_extract
    -> hybrid_retrieve
    -> self_check
-        sufficient            -> generate (RAG-grounded) -> END
+        sufficient            -> generate (RAG-grounded)
         retry budget left     -> query_variate -> hybrid_retrieve (cycle,
                                  each pass widens top_k: 10 -> 20 -> 30)
-        budget exhausted      -> generate (soft-escape redirect) -> END
+        budget exhausted      -> generate (soft-escape redirect)
+   -> generate
+   -> answer_check (post-generate answer-quality gate)
+        answer_ok             -> END
+        rejected & budget left-> query_variate -> hybrid_retrieve (cycle)
+        rejected & exhausted  -> END
+
+The retry budget (len of retrieval_top_k_schedule) is SHARED between the
+self_check loop and the answer_check loop — both bump `retry_count`, which
+also drives the escalating top_k in hybrid_retrieve — so a falsely-"sufficient"
+verdict that still yields a non-answer gets caught by answer_check and
+triggers a wider re-search instead of slipping straight to the user.
 
 Routing now runs BEFORE rewrite so rewrites can be index-aware: the
 confluence_docs corpus is Korean while elasticsearch_docs / kafka_docs are
@@ -36,6 +47,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.answer_check import answer_check, should_regenerate
 from app.graph.nodes.debug_explain import debug_explain
 from app.graph.nodes.es_count import es_count
 from app.graph.nodes.es_list import es_list
@@ -101,6 +113,7 @@ def build_workflow():
     builder.add_node("metadata_extract", metadata_extract)
     builder.add_node("hybrid_retrieve", hybrid_retrieve)
     builder.add_node("self_check", self_check)
+    builder.add_node("answer_check", answer_check)
     builder.add_node("query_variate", query_variate)
     builder.add_node("es_count", es_count)
     builder.add_node("es_list", es_list)
@@ -160,7 +173,17 @@ def build_workflow():
     )
     # Variation node loops back into retrieval with the new queries.
     builder.add_edge("query_variate", "hybrid_retrieve")
-    builder.add_edge("generate", END)
+    # Every generated answer is gated by answer_check before reaching the user.
+    builder.add_edge("generate", "answer_check")
+    builder.add_conditional_edges(
+        "answer_check",
+        should_regenerate,
+        {
+            # Rejected answer with budget left → re-search from a new angle.
+            "retry": "query_variate",
+            "end": END,
+        },
+    )
     builder.add_edge("general_chat", END)
     builder.add_edge("debug_explain", END)
     builder.add_edge("instruction_save", END)

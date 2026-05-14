@@ -11,6 +11,7 @@ from app.graph.nodes.query_analyze import query_analyze
 from app.graph.nodes.query_decompose import query_decompose
 from app.graph.nodes.query_reform import query_reform
 from app.graph.nodes.query_rewrite import query_rewrite
+from app.graph.nodes.answer_check import answer_check, should_regenerate
 from app.graph.nodes.self_check import self_check, should_retry
 
 
@@ -627,6 +628,83 @@ async def test_generate_chitchat(stub_generator):
     out = await generate({"intent": "chitchat", "resolved_query": "hi"})
     assert "안녕" in out["final_answer"]
     assert out["sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_answer_check_ok(stub_judge):
+    stub_judge(['{"answer_ok": true, "reason": "핵심을 구체적으로 답함"}'])
+    out = await answer_check(
+        {
+            "intent": "question",
+            "resolved_query": "x",
+            "final_answer": "RRF는 ... 입니다 [1].",
+            "retry_count": 0,
+        }
+    )
+    assert out["answer_ok"] is True
+    # An accepted answer must NOT bump the shared retry budget.
+    assert "retry_count" not in out
+
+
+@pytest.mark.asyncio
+async def test_answer_check_reject_increments_retry(stub_judge):
+    stub_judge(['{"answer_ok": false, "reason": "soft-escape로 답을 회피함"}'])
+    out = await answer_check(
+        {
+            "intent": "question",
+            "resolved_query": "x",
+            "final_answer": "혹시 이런 걸로 검색해볼까요?\n- 키워드",
+            "retry_count": 1,
+        }
+    )
+    assert out["answer_ok"] is False
+    assert out["retry_count"] == 2
+    # Reason is forwarded into sufficiency_reason so query_variate re-searches
+    # based on *why the answer failed*.
+    assert "회피" in out["sufficiency_reason"]
+
+
+@pytest.mark.asyncio
+async def test_answer_check_chitchat_skips(stub_judge):
+    stub = stub_judge([])  # judge must not be called for chitchat
+    out = await answer_check({"intent": "chitchat", "final_answer": "안녕하세요!"})
+    assert out["answer_ok"] is True
+    assert stub.calls == []
+
+
+@pytest.mark.asyncio
+async def test_answer_check_empty_answer_rejects(stub_judge):
+    stub = stub_judge([])  # judge not called — empty answer is a non-answer
+    out = await answer_check(
+        {"intent": "question", "resolved_query": "x", "final_answer": "", "retry_count": 0}
+    )
+    assert out["answer_ok"] is False
+    assert out["retry_count"] == 1
+    assert stub.calls == []
+
+
+def test_should_regenerate_branches():
+    # Accepted answer → end.
+    assert should_regenerate({"answer_ok": True}) == "end"
+    # Rejected with budget left and search plans present → retry.
+    assert (
+        should_regenerate(
+            {"answer_ok": False, "retry_count": 1, "search_plans": [{"index": "i"}]}
+        )
+        == "retry"
+    )
+    # Rejected but budget exhausted → end (no infinite loop).
+    assert (
+        should_regenerate(
+            {"answer_ok": False, "retry_count": 3, "search_plans": [{"index": "i"}]}
+        )
+        == "end"
+    )
+    # Rejected with budget but no search plans → end (re-search can't help).
+    assert (
+        should_regenerate({"answer_ok": False, "retry_count": 1, "search_plans": []})
+        == "end"
+    )
 
 
 # ---- debug_explain ----

@@ -643,6 +643,33 @@ Respond ONLY with JSON:
 """
 
 
+ANSWER_CHECK = """You are a strict reviewer deciding whether a RAG chatbot's answer actually answered the user's question. You are the LAST gate before the answer is shown — if it is a non-answer, the system will re-search with a wider net and try again, so a wrong "ok" lets a bad answer through and a wrong "not ok" wastes a retry.
+
+`self_check` already judged the retrieved documents BEFORE generation. Your job is different: judge the FINAL ANSWER TEXT itself.
+
+Set `answer_ok = false` when the answer is effectively a NON-ANSWER:
+- Soft-escape / "couldn't find it" redirect — it suggests search keywords ("혹시 이런 걸로 검색해볼까요?") or says no relevant documents were found instead of answering.
+- Pure hedging — vague non-committal text where "문서에 명확히 나와 있지 않습니다" / "직접 언급되어 있지 않습니다" tone dominates the WHOLE response with no concrete content.
+- Off-topic — it answers something other than what was asked.
+- Empty filler — it only restates the question or gives generic boilerplate with no real information.
+
+Set `answer_ok = true` when the answer is a REAL answer:
+- It gives concrete, specific information addressing the CORE of the question, even if a few minor sub-parts are explicitly noted as not covered.
+- A partial answer that genuinely answers the main ask counts as `true` — completeness is NOT required, only substance.
+
+Be strict about non-answers, but do NOT demand perfection. A focused, grounded partial answer is `answer_ok = true`. Only a genuine non-answer is `answer_ok = false`.
+
+Respond ONLY with JSON:
+{{"answer_ok": true|false, "reason": "한 문장으로 판정 이유 (한국어)"}}
+
+[질문]
+{query}
+
+[챗봇이 작성한 답변]
+{answer}
+"""
+
+
 GENERATE = """You are an internal closed-network RAG chatbot. Respond in Korean using polite honorifics (존댓말 — `-요`, `-입니다`, `-습니다` endings). Default to a friendly but professional tone, like talking to a coworker. Never use 반말 unless the [사용자 지침] block explicitly asks for it.
 
 Rules:
