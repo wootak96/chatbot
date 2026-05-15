@@ -967,91 +967,99 @@ async def test_generate_omits_block_when_no_user_md(
     assert "\n[사용자 지침]\n" not in sent_prompt
 
 
-# ---------- re_search intent detection (query_analyze) ----------
+# ---------- re_search intent detection (LLM-driven) ----------
+#
+# Classification is now the LLM's responsibility — no regex post-check.
+# These tests cover the data plumbing (LLM → state) and defensive validation
+# of the LLM's `forced_indices` payload. The semantic accuracy of when to
+# emit re_search is a prompt-quality concern and is not unit-tested here.
+
 
 @pytest.mark.asyncio
-async def test_query_analyze_re_search_detects_index_and_action(stub_judge):
-    """Confluence + 검색해줘 → re_search + forced_indices=['confluence']."""
-    stub_judge(['{"intent": "question"}'])  # LLM may say question; regex overrides
-    state = {"current_query": "confluence에서 검색해줘", "messages": []}
-    out = await query_analyze(state)
+async def test_query_analyze_re_search_passes_forced_indices_through(stub_judge):
+    """LLM returns re_search + canonical forced_indices → both surface intact."""
+    stub_judge(['{"intent": "re_search", "forced_indices": ["confluence"]}'])
+    out = await query_analyze(
+        {"current_query": "confluence에서 검색해줘", "messages": []}
+    )
     assert out["intent"] == "re_search"
     assert out["forced_indices"] == ["confluence"]
 
 
 @pytest.mark.asyncio
-async def test_query_analyze_re_search_detects_multiple_aliases(stub_judge):
-    stub_judge(['{"intent": "question"}'])
-    state = {
-        "current_query": "es랑 confluence에서 다시 찾아줘",
-        "messages": [],
-    }
-    out = await query_analyze(state)
-    assert out["intent"] == "re_search"
-    assert set(out["forced_indices"]) == {"elasticsearch", "confluence"}
-
-
-@pytest.mark.asyncio
-async def test_query_analyze_re_search_requires_action_verb(stub_judge):
-    """Index alias alone (no 검색/찾아/조회) → not re_search."""
-    stub_judge(['{"intent": "question"}'])
-    state = {"current_query": "confluence에 뭐 있어?", "messages": []}
-    out = await query_analyze(state)
-    assert out["intent"] == "question"
-    assert "forced_indices" not in out
-
-
-@pytest.mark.asyncio
-async def test_query_analyze_re_search_requires_index_alias(stub_judge):
-    """Action verb without a named index → not re_search, falls through."""
-    stub_judge(['{"intent": "question"}'])
-    state = {"current_query": "다시 검색해줘", "messages": []}
-    out = await query_analyze(state)
-    assert out["intent"] == "question"
-    assert "forced_indices" not in out
-
-
-@pytest.mark.asyncio
-async def test_query_analyze_re_search_confluence_aliases(stub_judge):
-    """Confluence has multiple Korean variants — all should resolve to
-    'confluence'."""
+async def test_query_analyze_re_search_multi_indices(stub_judge):
+    """Multiple canonical aliases in LLM response → all preserved, order kept."""
     stub_judge(
-        ['{"intent": "question"}'] * 6
-    )  # one per query below; LLM call is short-circuited by re_search regex anyway
-    cases = [
-        "confluence에서 검색해줘",
-        "컨플루언스에서 검색해줘",
-        "콘플루언스에서 검색해줘",
-        "컨플에서 검색해줘",
-        "콘플에서 검색해줘",
-        "사내 문서에서 검색해줘",
-    ]
-    for q in cases:
-        out = await query_analyze({"current_query": q, "messages": []})
-        assert out["intent"] == "re_search", f"{q!r} should be re_search"
-        assert out["forced_indices"] == ["confluence"], (
-            f"{q!r} should resolve to ['confluence']"
-        )
+        ['{"intent": "re_search", "forced_indices": ["elasticsearch", "kafka"]}']
+    )
+    out = await query_analyze(
+        {"current_query": "공식 문서들 좀 뒤져봐줘", "messages": []}
+    )
+    assert out["intent"] == "re_search"
+    assert out["forced_indices"] == ["elasticsearch", "kafka"]
 
 
 @pytest.mark.asyncio
-async def test_query_analyze_re_search_official_doc_phrasing(stub_judge):
-    """'es 공식문서', 'kafka 공식문서' — the base alias still triggers."""
-    stub_judge(['{"intent": "question"}'] * 3)
-    out1 = await query_analyze(
-        {"current_query": "es 공식문서에서 검색해줘", "messages": []}
+async def test_query_analyze_re_search_filters_invalid_aliases(stub_judge):
+    """LLM emits canonical + garbage → garbage filtered, re_search stays."""
+    stub_judge(
+        ['{"intent": "re_search", "forced_indices": ["confluence", "garbage", "wiki"]}']
     )
-    assert out1["forced_indices"] == ["elasticsearch"]
+    out = await query_analyze(
+        {"current_query": "사내 위키에서 찾아봐", "messages": []}
+    )
+    assert out["intent"] == "re_search"
+    assert out["forced_indices"] == ["confluence"]
 
-    out2 = await query_analyze(
-        {"current_query": "elasticsearch 공식문서에서 검색해줘", "messages": []}
-    )
-    assert out2["forced_indices"] == ["elasticsearch"]
 
-    out3 = await query_analyze(
-        {"current_query": "kafka 공식문서에서 검색해줘", "messages": []}
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_empty_indices_falls_back_to_question(stub_judge):
+    """re_search with no valid destinations has nowhere to re-route — fall
+    back to a normal question so the standard RAG path still answers."""
+    stub_judge(['{"intent": "re_search", "forced_indices": []}'])
+    out = await query_analyze(
+        {"current_query": "다시 검색해줘", "messages": []}
     )
-    assert out3["forced_indices"] == ["kafka"]
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_all_invalid_falls_back_to_question(stub_judge):
+    """forced_indices entirely outside the canonical set → empty after filter
+    → fall back to question (same defensive path as empty list)."""
+    stub_judge(
+        ['{"intent": "re_search", "forced_indices": ["wiki", "garbage"]}']
+    )
+    out = await query_analyze(
+        {"current_query": "wiki에서 찾아줘", "messages": []}
+    )
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_question_ignores_forced_indices(stub_judge):
+    """forced_indices on a non-re_search intent is irrelevant — must not leak
+    into the state (it would mis-route a normal question)."""
+    stub_judge(['{"intent": "question", "forced_indices": ["confluence"]}'])
+    out = await query_analyze(
+        {"current_query": "Kafka 설정 찾아줘", "messages": []}
+    )
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
+
+
+@pytest.mark.asyncio
+async def test_query_analyze_re_search_malformed_indices_field(stub_judge):
+    """LLM returns non-list for forced_indices (string, null) → defensively
+    treated as empty → fall back to question."""
+    stub_judge(['{"intent": "re_search", "forced_indices": "confluence"}'])
+    out = await query_analyze(
+        {"current_query": "confluence에서 찾아줘", "messages": []}
+    )
+    assert out["intent"] == "question"
+    assert "forced_indices" not in out
 
 
 # ---------- re_search_setup node ----------

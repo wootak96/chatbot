@@ -101,55 +101,11 @@ _DEBUG_STRONG = re.compile(
 )
 
 
-# Force-reroute safety net. Triggers when the user explicitly names a target
-# index alias AND a search-action verb in the same utterance — e.g.,
-# "confluence에서 검색해줘", "kafka_docs에서 다시 찾아줘".
-# This intent reuses the immediately prior turn's BM25/semantic queries but
-# overrides the routed indices with what the user just named. Without the
-# action verb, "confluence에 뭐 있어?" is a normal question, not a re-search.
-_RESEARCH_ACTION = re.compile(
-    r"(다시\s*)?(검색|찾아|조회)"
-)
-_INDEX_ALIAS_PATTERNS: dict[str, re.Pattern[str]] = {
-    # `(?<![a-zA-Z])es(?![a-zA-Z])` matches the abbreviation "es" with ASCII-
-    # only boundaries — Python's `\b` is Unicode-aware and treats Korean as
-    # word chars, so `\bes\b` would NOT fire inside "es랑" / "es에서".
-    # "공식문서" doesn't need its own alternative because the base alias
-    # ("elasticsearch" / "kafka" / "confluence") will match the substring.
-    "elasticsearch": re.compile(
-        r"(?i)(elasticsearch_docs|elasticsearch|엘라스틱서치|엘라스틱|"
-        r"(?<![a-zA-Z])es(?![a-zA-Z]))"
-    ),
-    "kafka": re.compile(
-        r"(?i)(kafka_docs|kafka|카프카)"
-    ),
-    # Confluence has several Korean variants the user explicitly wants
-    # recognized: typo "콘플루언스" (oh vs eo), shortened "컨플" / "콘플",
-    # and the generic "사내 문서" / "사내 위키" framings.
-    "confluence": re.compile(
-        r"(?i)(confluence_docs|confluence|"
-        r"컨플루언스|콘플루언스|컨플|콘플|"
-        r"사내\s*위키|사내\s*문서)"
-    ),
-}
-
-
-def _parse_target_aliases(text: str) -> list[str]:
-    """Extract index aliases the user named (e.g., ['confluence', 'kafka'])."""
-    if not text:
-        return []
-    return [a for a, pat in _INDEX_ALIAS_PATTERNS.items() if pat.search(text)]
-
-
-def _is_research_query(text: str) -> tuple[bool, list[str]]:
-    """True + alias list when the message names at least one index AND a
-    search-action verb. False + [] otherwise."""
-    if not text or not _RESEARCH_ACTION.search(text):
-        return False, []
-    aliases = _parse_target_aliases(text)
-    if not aliases:
-        return False, []
-    return True, aliases
+# Canonical index alias names emitted by the LLM in `forced_indices`. Any
+# value outside this set in the LLM's response is filtered out; if the list
+# becomes empty after filtering, we fall back to a normal `question` since
+# re_search has nowhere to re-route to.
+_VALID_FORCED_INDICES = frozenset({"elasticsearch", "kafka", "confluence"})
 
 
 def _has_domain_term(text: str) -> bool:
@@ -201,13 +157,16 @@ async def query_analyze(state: RAGState) -> dict:
 
     forced_indices: list[str] = []
 
-    # Override 0: re_search wins when the user explicitly names indices AND
-    # uses a search-action verb. Detected by regex (deterministic) so it
-    # doesn't depend on the LLM recognizing the pattern.
-    is_research, aliases = _is_research_query(query)
-    if is_research:
-        intent = "re_search"
-        forced_indices = aliases
+    if intent == "re_search":
+        # Trust the LLM's judgment on which index/corpus the user designated
+        # as the search target. Filter to canonical names so a hallucinated
+        # alias can't poison `forced_indices`; if nothing valid remains, the
+        # re-route has no destination and we fall back to a normal question.
+        raw = data.get("forced_indices") or []
+        if isinstance(raw, list):
+            forced_indices = [a for a in raw if isinstance(a, str) and a in _VALID_FORCED_INDICES]
+        if not forced_indices:
+            intent = "question"
     # Override 1: debug pattern wins over everything else. Meta-questions
     # about a prior bot answer ("왜 답변이 이렇게 나왔어?", even when they
     # contain domain words) must reach `debug_explain`, not the search path.
