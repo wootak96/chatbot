@@ -2,7 +2,10 @@
 
 Drives the LangGraph workflow and emits:
   1. one SSE chunk per node (progress message)
-  2. final answer streamed token-by-token from the generate node's LLM
+  2. final answer streamed token-by-token from the generate node's LLM,
+     with inline [N] citations renumbered in appearance order via
+     `CitationRemapper` so the user sees [1], [2], [3]… instead of the
+     sparse candidate positions the LLM emits (e.g., [10], [16], [22]).
   3. trailing CITES marker (hidden in UI, used to wrap inline [N] as links) + [DONE]
 """
 
@@ -83,7 +86,14 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
     # Accumulators for log persistence — captured during the stream and
     # flushed to `{user_id}_logs` after the response is fully streamed out.
     progress_log_lines: list[str] = []
+    # `streamed_answer_buf` holds the DISPLAYED text (with [N] renumbered in
+    # citation-appearance order). `original_answer_buf` keeps the LLM's
+    # pre-remap text — needed because groundedness / `used` candidate
+    # tracking is indexed by the original 1-based candidate position, not
+    # the displayed sequence.
     streamed_answer_buf: list[str] = []
+    original_answer_buf: list[str] = []
+    remapper = CitationRemapper()
     # Per-node token usage. Populated from `on_chat_model_end` events emitted
     # by every LLM call in the graph (judge nodes + streaming generator).
     token_usage_by_node: dict[str, dict[str, int]] = {}
@@ -139,17 +149,25 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
 
             # Only the grounded `generate` node has a server-side **출처**
             # block to deduplicate against. general_chat / debug_explain have
-            # no sources, so we let their tokens through unchanged.
+            # no sources and no [N] citations, so they bypass both the
+            # SOURCE_MARKER buffer and the citation remapper.
             if node_name == "generate":
                 pending_buf += content
                 idx = pending_buf.find(SOURCE_MARKER)
                 if idx >= 0:
                     safe = pending_buf[:idx].rstrip()
                     if safe:
-                        streamed_answer_buf.append(safe)
-                        yield sse.text_chunk(
-                            safe, model=request.model, completion_id=completion_id
-                        )
+                        original_answer_buf.append(safe)
+                        # Stream ends here, so flush the remapper's
+                        # bracket buffer in the same emission.
+                        displayed = remapper.feed(safe) + remapper.flush()
+                        if displayed:
+                            streamed_answer_buf.append(displayed)
+                            yield sse.text_chunk(
+                                displayed,
+                                model=request.model,
+                                completion_id=completion_id,
+                            )
                     sources_truncated = True
                     pending_buf = ""
                 elif len(pending_buf) > len(SOURCE_MARKER):
@@ -158,26 +176,44 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     flush = pending_buf[: -len(SOURCE_MARKER)]
                     pending_buf = pending_buf[-len(SOURCE_MARKER):]
                     if flush:
-                        streamed_answer_buf.append(flush)
-                        yield sse.text_chunk(
-                            flush, model=request.model, completion_id=completion_id
-                        )
+                        original_answer_buf.append(flush)
+                        displayed = remapper.feed(flush)
+                        if displayed:
+                            streamed_answer_buf.append(displayed)
+                            yield sse.text_chunk(
+                                displayed,
+                                model=request.model,
+                                completion_id=completion_id,
+                            )
             else:
                 streamed_answer_buf.append(content)
+                original_answer_buf.append(content)
                 yield sse.text_chunk(
                     content, model=request.model, completion_id=completion_id
                 )
 
     # After the LLM stream ends, flush any held-back tail (only if we didn't
-    # already cut at SOURCE_MARKER).
+    # already cut at SOURCE_MARKER). The remapper also gets flushed so an
+    # unclosed `[` at end-of-stream is emitted literally rather than dropped.
     if not sources_truncated and pending_buf:
-        streamed_answer_buf.append(pending_buf)
-        yield sse.text_chunk(
-            pending_buf, model=request.model, completion_id=completion_id
-        )
+        original_answer_buf.append(pending_buf)
+        displayed = remapper.feed(pending_buf) + remapper.flush()
+        if displayed:
+            streamed_answer_buf.append(displayed)
+            yield sse.text_chunk(
+                displayed, model=request.model, completion_id=completion_id
+            )
+    else:
+        trailing = remapper.flush()
+        if trailing:
+            streamed_answer_buf.append(trailing)
+            yield sse.text_chunk(
+                trailing, model=request.model, completion_id=completion_id
+            )
 
     # If the generate node didn't stream (e.g., not-found case), fall back to
-    # the final_answer captured in state.
+    # the final_answer captured in state. The fallback path bypasses the
+    # remapper — those non-streamed answers don't carry [N] citations.
     if not answer_emitted:
         fallback = final_state.get("final_answer", "")
         if fallback:
@@ -188,21 +224,18 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                 fallback, model=request.model, completion_id=completion_id
             )
 
-    # Post-stream diagnostics (cited-docs list + groundedness verdict) are
-    # captured into progress_log_lines / final state for the persisted log
-    # and the debug_explain trace, but NOT streamed to the UI — users
-    # didn't want the trailing clutter under the answer.
-    cited_msg = _format_cited_docs(final_state, streamed_answer_buf)
-    if cited_msg:
-        progress_log_lines.append(cited_msg)
-
+    # Groundedness runs over the ORIGINAL (pre-remap) answer because
+    # `cited_indices` here must index into `candidates` by its original
+    # 1-based position — the remapping is a display-only concern.
     groundedness: dict[str, Any] = {}
-    answer_full = "".join(streamed_answer_buf) or final_state.get("final_answer", "")
+    original_full = "".join(original_answer_buf) or final_state.get(
+        "final_answer", ""
+    )
     candidates_for_check = final_state.get("candidates") or []
-    cited_for_check = _extract_cited_indices(answer_full)
+    cited_for_check = _extract_cited_indices(original_full)
     if candidates_for_check and cited_for_check:
         groundedness = await run_groundedness_check(
-            answer=answer_full,
+            answer=original_full,
             candidates=candidates_for_check,
             cited_indices=cited_for_check,
         )
@@ -211,16 +244,29 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
             progress_log_lines.append(verdict_msg)
 
     # Emit a hidden CITES marker so the frontend can wrap inline [N] tokens in
-    # the answer with clickable links to the corresponding source URL. We drop
-    # the verbose **출처** block to save tokens — only N→url is needed since
-    # the bracket text itself shows up inline already.
+    # the answer with clickable links to the corresponding source URL. After
+    # remapping, displayed `[new_N]` corresponds to the original candidate at
+    # `mapping^-1(new_N)` — we resolve that here so the frontend mapping is
+    # against the visible bracket numbers, not the original sparse ones.
     sources = final_state.get("sources") or []
+    inverse_map = {new_n: orig_n for orig_n, new_n in remapper.mapping.items()}
     cites = []
-    for i, s in enumerate(sources, 1):
-        url = (s.get("url") or "").strip()
-        if not url:
-            continue
-        cites.append({"n": i, "url": url})
+    if inverse_map:
+        for new_n in sorted(inverse_map):
+            orig_n = inverse_map[new_n]
+            if 1 <= orig_n <= len(sources):
+                url = (sources[orig_n - 1].get("url") or "").strip()
+                if url:
+                    cites.append({"n": new_n, "url": url})
+    else:
+        # No remapping happened (chitchat / general / debugging): keep the
+        # original 1-aligned mapping so callers without citations still get a
+        # usable list when `sources` is populated through other code paths.
+        for i, s in enumerate(sources, 1):
+            url = (s.get("url") or "").strip()
+            if not url:
+                continue
+            cites.append({"n": i, "url": url})
     if cites:
         marker = "\n<!--CITES:" + json.dumps(cites, ensure_ascii=False) + "-->"
         yield sse.text_chunk(
@@ -248,6 +294,7 @@ async def _drive_workflow(request: ChatRequest) -> AsyncIterator[str]:
                     final_state,
                     progress_log_lines,
                     streamed_answer_buf,
+                    original_answer_buf,
                     token_usage_by_node,
                     groundedness,
                 ),
@@ -262,15 +309,25 @@ def _build_log_doc(
     final_state: dict[str, Any],
     progress_log_lines: list[str],
     streamed_answer_buf: list[str],
+    original_answer_buf: list[str],
     token_usage_by_node: dict[str, dict[str, int]] | None = None,
     groundedness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Flatten the final RAGState into the `{user_id}_logs` document shape."""
+    """Flatten the final RAGState into the `{user_id}_logs` document shape.
+
+    `final_answer` is stored as the displayed (citation-remapped) text so the
+    log matches what the user saw. `cited_indices` is extracted from the
+    ORIGINAL pre-remap answer because it must index into `candidates` by
+    their 1-based position — the `used` / `used_candidates` flags would be
+    wrong if they pointed at displayed sequence numbers (1, 2, 3) instead of
+    actual candidate positions (e.g., 10, 16, 22).
+    """
     last_user = next(
         (m for m in reversed(request.messages) if m.role == "user"), None
     )
     user_question = last_user.content if last_user else ""
     final_answer = final_state.get("final_answer") or "".join(streamed_answer_buf)
+    original_answer = "".join(original_answer_buf) or final_answer
     sub_queries = final_state.get("sub_queries") or []
     routing_per_query = final_state.get("target_indices_per_query") or []
     target_indices = sorted({idx for indices in routing_per_query for idx in indices})
@@ -280,7 +337,7 @@ def _build_log_doc(
     ]
     plans = final_state.get("search_plans") or []
     candidates = final_state.get("candidates") or []
-    cited_indices = _extract_cited_indices(final_answer)
+    cited_indices = _extract_cited_indices(original_answer)
     by_node = token_usage_by_node or {}
     total_in = sum(b.get("input", 0) for b in by_node.values())
     total_out = sum(b.get("output", 0) for b in by_node.values())
@@ -367,6 +424,89 @@ def _build_log_doc(
 # are skipped because the inner alphabet is digits + comma + whitespace only.
 _CITATION_RE = re.compile(r"\[([\d,\s]+)\]")
 
+# Citation-inner allowed character set: digits, commas, and ASCII whitespace.
+# Mirrors `_CITATION_RE`'s inner class so the streaming remapper makes the
+# same accept/reject decision as the post-hoc regex extractor.
+_CITATION_INNER_CHARS = frozenset("0123456789, \t")
+
+
+class CitationRemapper:
+    """Stream-safe renumberer for inline `[N]` citations.
+
+    The LLM cites candidates by their 1-based position (so for 20 candidates
+    it may emit `[10]`, `[16]`, `[22]`). We rewrite those to `[1]`, `[2]`,
+    `[3]` in order of first appearance — the user-visible bracket numbers
+    match the trailing source list / clickable order, not the (possibly
+    sparse) candidate indices.
+
+    Bracket tokens can arrive split across LLM chunks (`[1` then `0]`), so
+    `feed()` buffers from `[` until either `]` or a non-citation char
+    disqualifies the run. `flush()` releases any unclosed bracket literally —
+    callers must invoke it once the stream ends.
+
+    Non-citation brackets (markdown links `[text](url)`, code snippets) pass
+    through unchanged: the first non-allowed char dumps the buffered content
+    verbatim.
+    """
+
+    def __init__(self) -> None:
+        self._mapping: dict[int, int] = {}
+        self._buf = ""           # accumulates chars from '[' through ']'
+        self._in_bracket = False # True iff _buf starts with '['
+
+    def feed(self, chunk: str) -> str:
+        out: list[str] = []
+        for ch in chunk:
+            if self._in_bracket:
+                if ch == "]":
+                    inner = self._buf[1:]
+                    nums = re.findall(r"\d+", inner)
+                    if nums and all(c in _CITATION_INNER_CHARS for c in inner):
+                        new_parts: list[str] = []
+                        for n_str in nums:
+                            n = int(n_str)
+                            if n not in self._mapping:
+                                self._mapping[n] = len(self._mapping) + 1
+                            new_parts.append(str(self._mapping[n]))
+                        out.append("[" + ", ".join(new_parts) + "]")
+                    else:
+                        out.append(self._buf + ch)
+                    self._buf = ""
+                    self._in_bracket = False
+                elif ch in _CITATION_INNER_CHARS:
+                    self._buf += ch
+                else:
+                    # Disqualifies as a citation. Emit the buffered open-bracket
+                    # run literally, then re-process the current char in the
+                    # non-bracket state (it might be another '[').
+                    out.append(self._buf)
+                    self._buf = ""
+                    self._in_bracket = False
+                    if ch == "[":
+                        self._buf = ch
+                        self._in_bracket = True
+                    else:
+                        out.append(ch)
+            else:
+                if ch == "[":
+                    self._buf = ch
+                    self._in_bracket = True
+                else:
+                    out.append(ch)
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Release any unclosed bracket buffer literally. Idempotent."""
+        out = self._buf
+        self._buf = ""
+        self._in_bracket = False
+        return out
+
+    @property
+    def mapping(self) -> dict[int, int]:
+        """{original_N: displayed_N}. Empty when no citations were seen."""
+        return dict(self._mapping)
+
 
 def _extract_usage(output: Any) -> dict[str, int] | None:
     """Pull token usage off an LLM response. Tolerates the multiple shapes
@@ -393,40 +533,6 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
         out_ = int(tu.get("completion_tokens", 0) or 0)
         return {"input": in_, "output": out_, "total": in_ + out_}
     return None
-
-
-def _format_cited_docs(
-    final_state: dict[str, Any], streamed_answer_buf: list[str]
-) -> str:
-    """Build the post-stream `📚 답변 인용 문서` progress block, listing only
-    candidates whose 1-based index appears as `[N]` in the answer body.
-
-    Returns an empty string when there are no candidates or no citations
-    (chitchat / general / debugging / not-found responses)."""
-    candidates = final_state.get("candidates") or []
-    if not candidates:
-        return ""
-    answer_text = "".join(streamed_answer_buf) or final_state.get("final_answer", "")
-    cited = _extract_cited_indices(answer_text)
-    if not cited:
-        return ""
-    seen_keys: set[str] = set()
-    lines: list[str] = ["📚 답변 인용 문서"]
-    for i, d in enumerate(candidates, 1):
-        if i not in cited:
-            continue
-        label = (
-            d.get("title") or d.get("url") or d.get("id") or "(제목 없음)"
-        )
-        key = (d.get("title") or d.get("url") or d.get("id") or "").strip()
-        if key and key in seen_keys:
-            continue
-        if key:
-            seen_keys.add(key)
-        lines.append(f"  ✓ {label}")
-    if len(lines) == 1:
-        return ""
-    return "\n".join(lines)
 
 
 def _extract_cited_indices(answer: str) -> set[int]:
